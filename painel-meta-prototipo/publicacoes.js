@@ -40,6 +40,41 @@ function migrarPublicacao(p) {
     return p;
 }
 
+/**
+ * Registra a URL pública de uma mídia e sincroniza o estado da publicação.
+ *
+ * Localiza a mídia pelo ID estável (não depende da referência antiga, que pode
+ * ter sido recriada por uma renderização/migração) e, conforme o tipo, preenche
+ * `imagemUrl` (imagem única) ou `videoUrl` (Reel). No carrossel, a URL vive em
+ * cada mídia.
+ *
+ * @returns {object|null} a mídia atualizada ou null quando não encontrada.
+ */
+function registrarUrlPublica(publicacao, midiaId, urlPublica, meta = {}) {
+    if (!publicacao || typeof urlPublica !== 'string' || !urlPublica) return null;
+    const midia = (publicacao.imagens || []).find(item => item.id === midiaId);
+    if (!midia) return null;
+    midia.urlPublica = urlPublica;
+    midia.statusUpload = 'concluído';
+    if (meta.bytes !== undefined && meta.bytes !== null) midia.tamanho = meta.bytes;
+    if (meta.filename) midia.arquivo = meta.filename;
+
+    const indice = publicacao.imagens.indexOf(midia);
+    if (publicacao.tipoMidia === 'imagem') {
+        if (indice === 0 || !publicacao.imagemUrl) publicacao.imagemUrl = urlPublica;
+    } else if (publicacao.tipoMidia === 'reel' && midia.tipo === 'video') {
+        publicacao.videoUrl = urlPublica;
+    }
+    return midia;
+}
+
+/** Escreve no campo visual o valor atual de `imagemUrl`, mantendo o formulário coerente com o estado. */
+function sincronizarUrlPublicaNoCampo(campo, publicacao) {
+    const valor = publicacao?.imagemUrl || '';
+    if (campo) campo.value = valor;
+    return valor;
+}
+
 /** Traduz o estado interno em rótulo para a interface. */
 function estadoPublicacao(p) {
     if (p.publicacaoReal?.estado === 'publicado') return 'Publicada';
@@ -47,6 +82,6 @@ function estadoPublicacao(p) {
     return ({ rascunho: 'Em preparação', 'em revisão': 'Em revisão', confirmado: 'Confirmada', agendada: 'Agendada' })[p.estado] || 'Em preparação';
 }
 
-const Publicacoes = { migrarPublicacao, estadoPublicacao };
+const Publicacoes = { migrarPublicacao, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo };
 if (typeof module !== 'undefined') module.exports = Publicacoes;
 else globalThis.Publicacoes = Publicacoes;

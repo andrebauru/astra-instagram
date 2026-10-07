@@ -152,28 +152,38 @@ function renderizarMidias() {
             controles.append(botao);
         }
         if (!url) {
-            const enviar = elemento('button', 'Enviar para URL pública'); enviar.type = 'button';
+            const enviar = elemento('button', 'Enviar mídia'); enviar.type = 'button';
             enviar.onclick = () => enviarMidia(foto, enviar);
             controles.append(enviar);
         }
-        figura.append(imagem, legenda, controles);
+        figura.append(imagem, legenda);
+        if (url) {
+            const link = elemento('a', `✓ Enviada · ${url}`, 'nota');
+            link.href = url; link.target = '_blank'; link.rel = 'noopener'; link.title = 'Abrir a URL pública';
+            figura.append(link);
+        }
+        figura.append(controles);
         galeria.append(figura);
     });
 }
 
-/** Envia uma mídia local ao MediaService e guarda a URL pública. */
+/** Envia uma mídia local ao MediaService, sincroniza o estado e o campo visual. */
 async function enviarMidia(midia, botao) {
     if (midia.tipo !== 'imagem') { avisar('Somente imagens JPEG/PNG/WebP usam o upload público nesta versão.'); return; }
+    const conteudo = atual;
     const original = botao?.textContent;
     if (botao) { botao.disabled = true; botao.textContent = 'Enviando…'; }
     try {
         const resposta = await cliente.solicitar('/media/upload', { id: midia.id, dados: midia.dados, mime: midia.mime, nome: midia.nome }, { prazo: 60000 });
-        midia.urlPublica = resposta.public_url;
-        midia.tamanho = resposta.bytes ?? midia.tamanho;
-        registrar('media_uploaded', { mediaId: midia.id, mime: midia.mime, bytes: midia.tamanho });
-        IR.sincronizarUrlsPublicas(atual);
-        marcarAlterado(); renderizarMidias(); renderizarRevisao();
-        avisar('Imagem publicada em URL HTTPS pública.');
+        if (typeof resposta?.public_url !== 'string' || !resposta.public_url) throw Object.assign(new Error('O servidor não retornou public_url.'), { codigo: 'MIDIA_UPLOAD_RESPOSTA_INVALIDA' });
+        // Re-localiza pelo ID estável: a referência antiga pode ter sido recriada.
+        const atualizada = Publicacoes.registrarUrlPublica(conteudo, midia.id, resposta.public_url, resposta);
+        if (!atualizada) throw Object.assign(new Error('A mídia enviada não foi encontrada no conteúdo atual.'), { codigo: 'MIDIA_NAO_ENCONTRADA' });
+        registrar('media_uploaded', { mediaId: midia.id, mime: midia.mime, bytes: atualizada.tamanho });
+        marcarAlterado();
+        if (conteudo === atual) { sincronizarCampos(); renderizarMidias(); renderizarRevisao(); }
+        await salvar(true);
+        avisar('✓ Imagem enviada. URL pública preenchida.');
     } catch (erro) {
         registrar('media_upload_failed', { mediaId: midia.id, code: erro.codigo, message: erro.message });
         avisar(`Upload: ${erro.message}`);
@@ -241,6 +251,8 @@ const CAMPOS = ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia'
 function sincronizarCampos() {
     $('tipoMidia').value = atual.tipoMidia;
     for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'hashtags', 'palavras', 'ideias', 'imagemUrl', 'videoUrl', 'legenda']) if ($(campo)) $(campo).value = atual[campo] || '';
+    // Garante que o campo visual reflita o estado mesmo após upload/migração.
+    if ($('imagemUrl')) Publicacoes.sincronizarUrlPublicaNoCampo($('imagemUrl'), atual);
     $('campo-imagem-url').hidden = atual.tipoMidia === 'reel';
     $('campo-video-url').hidden = atual.tipoMidia !== 'reel';
     $('usar-visao').checked = atual.usarVisao !== false;
