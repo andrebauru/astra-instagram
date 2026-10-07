@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Astra Instagram · Estúdio de publicações</title>
+<link rel="stylesheet" href="estilo.css">
+<script defer src="regras.js"></script>
+<script defer src="empresa.js"></script>
+<script defer src="publicacoes.js"></script>
+<script defer src="planejamento-semanal.js"></script>
+<script defer src="diagnostico.js"></script>
+<script defer src="integracao-regras.js"></script>
+<script defer src="painel.js"></script>
+<script defer src="agendamentos.js"></script>
+</head>
+<body>
+<header>
+  <a class="marca" href="./"><span class="icone">a</span> Astra Instagram<span class="divisor">/</span><small>estúdio de conteúdo</small></a>
+  <nav class="navegacao" aria-label="Áreas do Astra">
+    <button type="button" data-view="editor" aria-pressed="true">Editor</button>
+    <button type="button" data-view="agendamentos" aria-pressed="false">Agendamentos</button>
+    <button type="button" data-view="configuracoes" aria-pressed="false">Configurações</button>
+  </nav>
+  <span class="selo" id="selo-build">● Bridge local</span>
+</header>
+
+<main>
+<!-- ============================================================= -->
+<!-- EDITOR (Mídia → Informações → IA → Revisão → Publicar/Agendar) -->
+<!-- ============================================================= -->
+<section id="view-editor" class="view">
+  <div class="cabecalho">
+    <div><p class="eyebrow">MÍDIA → INFORMAÇÕES → IA → REVISÃO → PUBLICAR AGORA OU AGENDAR</p><h1>Prepare sua próxima publicação.</h1><p class="muted">IA prepara o conteúdo. Você revisa e decide publicar ou agendar.</p></div>
+    <span id="estado" class="selo"></span>
+  </div>
+
+  <div class="conexao" aria-label="Conexão com o servidor">
+    <div><strong id="status-servidor" role="status">Verificando servidor…</strong><p id="detalhes-servidor" class="nota"></p><p id="status-instagram" role="status">Instagram ainda não verificado.</p></div>
+    <div class="acoes"><button id="atualizar-conexao" type="button">Atualizar status</button><button id="testar-instagram" type="button">Testar Instagram</button></div>
+  </div>
+
+  <div class="layout">
+    <article class="cartao">
+      <h2>1. Mídia</h2>
+      <label>Tipo de publicação no Instagram
+        <select id="tipoMidia"><option value="imagem">Imagem única</option><option value="reel">Reel</option><option value="carrossel">Carrossel</option></select>
+      </label>
+      <div class="duas-colunas">
+        <label id="campo-imagem-url">URL pública da imagem<input id="imagemUrl" type="url" placeholder="https://seu-dominio.com/imagem.jpg"></label>
+        <label id="campo-video-url" hidden>URL pública do vídeo<input id="videoUrl" type="url" placeholder="https://seu-dominio.com/video.mp4"></label>
+      </div>
+      <p id="status-url-publica" class="nota" role="status"></p>
+      <label>Ação para este envio múltiplo
+        <select id="acao-upload">
+          <option value="biblioteca">Adicionar à publicação atual</option>
+          <option value="carrossel">Criar uma publicação em carrossel</option>
+          <option value="distribuir">Criar várias publicações para distribuir na agenda</option>
+        </select>
+      </label>
+      <label class="upload"><span class="upload-icone">＋</span><strong>Selecionar imagens e vídeos</strong><span>JPEG, PNG, WebP ou MP4 · progresso individual</span><input id="arquivos" type="file" accept="image/jpeg,image/png,image/webp,video/mp4" multiple></label>
+      <div id="progresso-upload" class="lista-status" aria-live="polite"></div>
+      <div id="galeria" class="galeria"></div>
+    </article>
+
+    <article class="cartao">
+      <h2>2. Informações</h2>
+      <label>Objetivo da publicação<input id="objetivo" placeholder="Ex.: divulgar o encontro de domingo"></label>
+      <label>Tema<input id="tema"></label>
+      <label>Fatos informados pelo usuário<textarea id="fatos" rows="3"></textarea></label>
+      <label>Informações adicionais (opcional)<textarea id="contexto" rows="3" placeholder="O que você sabe e a IA não descobre olhando a mídia."></textarea></label>
+      <h3>Análise de mídia</h3>
+      <button id="analisar-midia" type="button">Analisar mídia com IA</button>
+      <label>Fatos identificados pela IA<textarea id="fatosIa" rows="3" placeholder="Revise, edite ou remova."></textarea></label>
+      <label>Texto encontrado na mídia<textarea id="textoMidia" rows="2" placeholder="OCR: palavras e frases detectadas."></textarea></label>
+      <div class="duas-colunas">
+        <label>Hashtags obrigatórias<textarea id="hashtags" rows="2" placeholder="#SuaMarca #SuaCampanha"></textarea></label>
+        <label>Dicas de tema para a IA ⓘ<textarea id="palavras" rows="2" placeholder="Uma por linha; não precisa aparecer literalmente."></textarea></label>
+      </div>
+      <label>Ideias obrigatórias<textarea id="ideias" rows="2" placeholder="Uma por linha"></textarea></label>
+    </article>
+
+    <article class="cartao">
+      <h2>3. IA</h2>
+      <label>Modo de geração
+        <select id="modo-legenda"><option value="astra">Astra / OpenRouter — geração real</option><option value="manual">Escrever manualmente</option></select>
+      </label>
+      <div id="selecao-modelo">
+        <div class="modelo-controles">
+          <label>Modelo da Astra<select id="modelo-astra" disabled><option value="">Carregando modelos…</option></select></label>
+          <button id="atualizar-modelos" type="button">Atualizar modelos</button>
+        </div>
+        <p id="status-modelos" class="nota" role="status" aria-live="polite"></p>
+        <p id="detalhes-modelo" class="nota"></p>
+      </div>
+      <label class="check"><input type="checkbox" id="usar-visao" checked> Usar imagem disponível na geração com visão</label>
+      <p id="aviso-visao" class="nota"></p>
+      <div class="acoes">
+        <button id="gerar-legenda" type="button">Gerar com Astra</button>
+        <button id="reescrever-legenda" type="button">Reescrever com Astra</button>
+      </div>
+      <label>Legenda<textarea id="legenda" rows="8" placeholder="A legenda editável aparece aqui. Nada é publicado automaticamente."></textarea></label>
+      <p class="nota">A IA prepara; você revisa e edita. Se a IA falhar, escreva manualmente e continue.</p>
+    </article>
+
+    <article class="cartao">
+      <h2>4. Revisão</h2>
+      <div id="previas" class="duas-colunas"></div>
+      <h3>Checklist</h3>
+      <ul id="validacoes" class="validacoes"></ul>
+      <div class="acoes">
+        <button id="revisar" type="button">Marcar como revisado</button>
+        <button id="aprovar" class="primario" type="button">Confirmar conteúdo</button>
+      </div>
+      <p class="nota">Confirmar aqui não publica: libera as ações finais abaixo.</p>
+    </article>
+
+    <article class="cartao" id="acoes-finais">
+      <h2>5. Publicar agora ou agendar</h2>
+      <ul id="validacoes-publicacao" class="validacoes"></ul>
+      <p id="resultado-publicacao" role="status"></p>
+      <button id="preparar-publicacao" class="primario" type="button">Publicar agora no Instagram</button>
+      <h3>Agendar</h3>
+      <div class="duas-colunas">
+        <label>Data<input id="agendar-data" type="date"></label>
+        <label>Horário<input id="agendar-hora" type="time" value="18:00"></label>
+        <label>Timezone IANA<input id="agendar-fuso" list="fusos" value="Asia/Tokyo"><datalist id="fusos"><option value="Asia/Tokyo"><option value="America/Sao_Paulo"><option value="Europe/Lisbon"><option value="UTC"></datalist></label>
+      </div>
+      <button id="criar-agendamento" type="button">Adicionar à agenda</button>
+      <p class="nota">O agendamento é executado pelo mesmo serviço da publicação imediata.</p>
+    </article>
+  </div>
+</section>
+
+<!-- ============================================================= -->
+<!-- AGENDAMENTOS (página exclusiva)                               -->
+<!-- ============================================================= -->
+<section id="view-agendamentos" class="view" hidden>
+  <div class="cabecalho">
+    <div><p class="eyebrow">PROGRAMAÇÃO</p><h1>Agendamentos</h1><p class="muted">Visualize, crie, edite, pause ou cancele. A publicação reutiliza o mesmo serviço do Instagram.</p></div>
+    <div class="acoes"><button id="executar-agenda" type="button">Executar pendentes agora</button><button id="atualizar-agendamentos" type="button">Atualizar</button></div>
+  </div>
+  <div id="lista-agendamentos" class="calendario-semanal"></div>
+
+  <article class="cartao">
+    <h2>Planejar semana</h2>
+    <div class="duas-colunas">
+      <label>Início<input id="semana-inicio" type="date"></label>
+      <label>Fim<input id="semana-fim" type="date"></label>
+      <label>Publicações por dia<input id="semana-quantidade" type="number" min="1" max="12" value="1"></label>
+      <label>Horários permitidos<input id="semana-horarios" value="10:00,18:00"></label>
+      <label>Modo<select id="semana-modo"><option value="aleatorio">Aleatório sem repetição</option><option value="equilibrado">Equilibrado por formato</option><option value="manual">Manual</option></select></label>
+      <label>Intervalo mínimo (minutos)<input id="semana-intervalo" type="number" min="1" value="60"></label>
+      <label>Timezone IANA<input id="semana-fuso" list="fusos" value="Asia/Tokyo"></label>
+    </div>
+    <fieldset><legend>Dias</legend>
+      <label class="check"><input class="semana-dia" type="checkbox" value="1" checked>Seg</label>
+      <label class="check"><input class="semana-dia" type="checkbox" value="2" checked>Ter</label>
+      <label class="check"><input class="semana-dia" type="checkbox" value="3" checked>Qua</label>
+      <label class="check"><input class="semana-dia" type="checkbox" value="4" checked>Qui</label>
+      <label class="check"><input class="semana-dia" type="checkbox" value="5" checked>Sex</label>
+    </fieldset>
+    <div class="duas-colunas">
+      <label>Política de atraso<select id="semana-atraso"><option value="reagendar">Reagendar quando passar da tolerância</option><option value="publicar">Publicar mesmo atrasado (com limite por ciclo)</option></select></label>
+      <label>Tolerância de atraso (minutos)<input id="semana-tolerancia" type="number" min="0" value="30"></label>
+    </div>
+    <div class="acoes">
+      <button id="gerar-plano-semanal" type="button">Gerar rascunho</button>
+      <button id="aprovar-plano-semanal" class="primario" type="button">Aprovar e ativar</button>
+      <button id="pausar-plano-semanal" type="button">Pausar</button>
+      <button id="regenerar-semana" type="button">Regenerar selecionados</button>
+    </div>
+    <p id="semana-status" class="nota" role="status"></p>
+    <div id="calendario-semanal"></div>
+  </article>
+</section>
+
+<!-- ============================================================= -->
+<!-- CONFIGURAÇÕES (diagnóstico + empresa)                         -->
+<!-- ============================================================= -->
+<section id="view-configuracoes" class="view" hidden>
+  <div class="cabecalho"><div><p class="eyebrow">SUPORTE</p><h1>Configurações</h1></div></div>
+  <article class="cartao">
+    <h2>Diagnóstico</h2>
+    <p id="diagnostico-estado" class="nota" role="status">Consultando o estado do diagnóstico…</p>
+    <div class="acoes">
+      <button id="iniciar-diagnostico" class="primario" type="button">Iniciar diagnóstico · 48 horas</button>
+      <button id="encerrar-diagnostico" type="button">Encerrar diagnóstico</button>
+      <button id="baixar-diagnostico" type="button">Baixar diagnóstico sanitizado (.log)</button>
+    </div>
+    <label>Marcar um problema<input id="diagnostico-observacao" maxlength="240" placeholder="Observação curta, sem senhas ou conteúdo completo"></label>
+    <button id="marcar-problema" type="button">Marcar no horário atual</button>
+    <p id="diagnostico-retorno" class="nota" role="status"></p>
+  </article>
+  <article class="cartao">
+    <h2>Template da empresa</h2>
+    <label>Template desta publicação<select id="template-publicacao"><option value="padrao">Template padrão</option><option value="empresa-fixo">Template fixo da empresa</option></select></label>
+    <div class="acoes">
+      <button id="salvar-template-requisitos" type="button">Salvar como template fixo</button>
+      <button id="aplicar-template-requisitos" type="button" disabled>Aplicar template fixo</button>
+    </div>
+    <p id="status-template-requisitos" class="nota">Nenhum template fixo salvo.</p>
+  </article>
+</section>
+
+<footer><span id="salvamento">Alterações ainda não salvas</span><button id="salvar" class="primario" type="button">Salvar</button></footer>
+</main>
+<div id="mensagem" role="status" aria-live="polite"></div>
+
+<dialog id="confirmacao-publicacao" aria-labelledby="titulo-confirmacao">
+  <h2 id="titulo-confirmacao">Confirmar publicação real</h2>
+  <p id="conta-confirmacao"></p>
+  <p id="midia-confirmacao" class="texto-final"></p>
+  <p id="legenda-confirmacao" class="texto-final"></p>
+  <label class="check"><input id="autorizo-publicacao" type="checkbox">Revisei a mídia e a legenda e autorizo publicar agora.</label>
+  <div class="acoes"><button id="cancelar-publicacao" type="button">Voltar</button><button id="confirmar-publicacao" class="primario" type="button" disabled>Publicar agora no Instagram</button></div>
+</dialog>
+</body>
+</html>

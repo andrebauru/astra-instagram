@@ -1,0 +1,20 @@
+# Segredos
+.env
+.env.*
+
+# Dependências
+node_modules/
+
+# Estado de execução local
+logs/
+dados/
+*.log
+
+# Arquivos históricos/backups (não fazem parte do projeto ativo)
+backup-*/
+_backups/
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+*.tmp
