@@ -11,6 +11,7 @@
 <script defer src="planejamento-semanal.js"></script>
 <script defer src="diagnostico.js"></script>
 <script defer src="integracao-regras.js"></script>
+<script defer src="fluxo-editorial.js"></script>
 <script defer src="painel.js"></script>
 <script defer src="agendamentos.js"></script>
 </head>
@@ -144,6 +145,13 @@
           <button id="revisar" type="button">Marcar revisão humana</button>
           <button id="aprovar" class="primario" type="button">Confirmar conteúdo</button>
         </div>
+        <div id="decisao-publicacao" class="decisao-publicacao" hidden>
+          <strong>Conteúdo confirmado. Escolha o próximo passo:</strong>
+          <div class="acoes">
+            <button id="publicar-agora-revisao" class="primario" type="button">Publicar agora</button>
+            <button id="ir-agendamento" type="button">Salvar e ir para agendamento</button>
+          </div>
+        </div>
         <p class="nota">Marcar a revisão humana funciona independentemente das demais pendências. Só “Confirmar conteúdo”, “Publicar agora” e “Agendar” exigem o checklist completo.</p>
       </section>
 
@@ -212,7 +220,7 @@
         <div id="desempenho-resumo"></div>
       </section>
 
-      <footer><span id="salvamento">Alterações ainda não salvas</span><button id="salvar" class="primario" type="button">Salvar</button></footer>
+      <footer class="rodape-etapa"><div><strong id="etapa-salvar">Etapa Mídia</strong><span id="salvamento">Alterações ainda não salvas</span></div><button id="salvar" class="primario" type="button">Salvar e continuar</button></footer>
     </article>
   </div>
 </section>

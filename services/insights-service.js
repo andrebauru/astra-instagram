@@ -59,15 +59,26 @@ function paraISO(valor) {
     return Number.isNaN(data.getTime()) ? null : data.toISOString();
 }
 
+/** Ordena fontes de miniatura da Meta sem acrescentar parâmetros ou credenciais. */
+function fontesMiniatura(item) {
+    const filhos = Array.isArray(item?.children?.data) ? item.children.data : [];
+    const candidatos = [item?.thumbnail_url];
+    for (const filho of filhos) candidatos.push(filho?.thumbnail_url, filho?.media_url);
+    candidatos.push(item?.media_url);
+    return [...new Set(candidatos.filter(valor => typeof valor === 'string' && /^https:\/\//i.test(valor)))];
+}
+
 /** Normaliza uma mídia retornada pela API do Instagram. */
 function normalizarMidia(item) {
     if (!item?.id) return null;
+    const miniaturas = fontesMiniatura(item);
     return {
         id: String(item.id),
         formato: formatoMidia(item),
         publicadoEm: paraISO(item.timestamp),
         legenda: typeof item.caption === 'string' ? item.caption : '',
-        miniatura: item.thumbnail_url || item.media_url || null,
+        miniatura: miniaturas[0] || null,
+        miniaturas,
         permalink: typeof item.permalink === 'string' ? item.permalink : '',
         mediaType: item.media_type || null,
         productType: item.media_product_type || item.product_type || null
@@ -169,4 +180,4 @@ function criarInsightsService({ instagram, caminhoCache, agora = Date.now } = {}
     return { listarMidias, atualizarMetricas, atualizarMetrica, analisar, metricas, registrarPublicacaoMidia, _estado: () => estado };
 }
 
-module.exports = { criarInsightsService, normalizarMidia, normalizarMetricas, formatoMidia, criarCacheArquivo, PADRAO_PAGINA, MAXIMO_PAGINA };
+module.exports = { criarInsightsService, normalizarMidia, normalizarMetricas, formatoMidia, fontesMiniatura, criarCacheArquivo, PADRAO_PAGINA, MAXIMO_PAGINA };

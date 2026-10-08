@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const raiz = path.resolve(__dirname, '..', 'painel-meta-prototipo');
-const arquivos = ['regras.js', 'empresa.js', 'publicacoes.js', 'planejamento-semanal.js', 'diagnostico.js', 'integracao-regras.js', 'painel.js', 'agendamentos.js'];
+const arquivos = ['regras.js', 'empresa.js', 'publicacoes.js', 'planejamento-semanal.js', 'diagnostico.js', 'integracao-regras.js', 'fluxo-editorial.js', 'painel.js', 'agendamentos.js'];
 
 /** Cria um contexto com DOM mínimo (readyState=loading) para avaliar os scripts. */
 function criarContexto(registrados) {

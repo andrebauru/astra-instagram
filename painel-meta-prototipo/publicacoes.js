@@ -26,6 +26,7 @@ function migrarPublicacao(p) {
     p.estado ??= 'rascunho';
     p.statusPublicacao ??= 'nao_publicada';
     p.instagramMediaId ??= null; p.permalink ??= null; p.publicadoEm ??= null; p.erroPublicacao ??= null;
+    p.tentativasPublicacao = Array.isArray(p.tentativasPublicacao) ? p.tentativasPublicacao : [];
     p.imagens = (Array.isArray(p.imagens) ? p.imagens : []).map(item => ({
         id: item.id || globalThis.crypto?.randomUUID?.() || `midia-${Date.now()}`,
         nome: item.nome || 'Mídia sem nome',
@@ -85,6 +86,32 @@ function estadoPublicacao(p) {
     return ({ rascunho: 'Em preparação', 'em revisão': 'Em revisão', confirmado: 'Confirmada', agendada: 'Agendada' })[p.estado] || 'Em preparação';
 }
 
+/** Informa se uma nova tentativa explícita pode começar sem duplicar um envio. */
+function podeIniciarPublicacao(publicacao) {
+    return Boolean(publicacao) && !['publicando', 'publicado'].includes(publicacao.statusPublicacao);
+}
+
+/** Registra a intenção antes do envio e mantém o histórico para retry auditável. */
+function iniciarTentativa(publicacao, tentativaId, iniciadoEm = new Date().toISOString()) {
+    if (!podeIniciarPublicacao(publicacao) || !tentativaId) return null;
+    const tentativa = { estado: 'enviando', tentativaId, iniciadoEm };
+    publicacao.statusPublicacao = 'publicando';
+    publicacao.erroPublicacao = null;
+    publicacao.publicacaoReal = tentativa;
+    publicacao.tentativasPublicacao ??= [];
+    publicacao.tentativasPublicacao.push(tentativa);
+    return tentativa;
+}
+
+/** Reflete o estado da tentativa atual em sua entrada do histórico. */
+function atualizarHistoricoTentativa(publicacao) {
+    const tentativa = publicacao?.publicacaoReal;
+    if (!tentativa?.tentativaId) return;
+    const historico = publicacao.tentativasPublicacao || [];
+    const registro = historico.find(item => item.tentativaId === tentativa.tentativaId);
+    if (registro) Object.assign(registro, tentativa);
+}
+
 /**
  * Persiste o resultado real da publicação (sucesso ou falha da Meta).
  * Só é chamada depois de uma resposta confirmada do InstagramService.
@@ -95,6 +122,12 @@ function registrarPublicacao(publicacao, resultado = {}) {
         publicacao.statusPublicacao = 'falhou';
         publicacao.erroPublicacao = resultado.erro;
         publicacao.publicacaoReal = { estado: 'incerto', mensagem: resultado.erro, idPublicado: publicacao.instagramMediaId || null };
+        if (publicacao.tentativasPublicacao?.length) {
+            const ultima = publicacao.tentativasPublicacao.at(-1);
+            publicacao.publicacaoReal.tentativaId = ultima.tentativaId;
+            publicacao.publicacaoReal.iniciadoEm = ultima.iniciadoEm;
+        }
+        atualizarHistoricoTentativa(publicacao);
         return publicacao;
     }
     if (!resultado.mediaId) return null;
@@ -104,6 +137,12 @@ function registrarPublicacao(publicacao, resultado = {}) {
     publicacao.publicadoEm = resultado.publicadoEm || new Date().toISOString();
     publicacao.erroPublicacao = null;
     publicacao.publicacaoReal = { estado: 'publicado', idPublicado: resultado.mediaId, finalizadoEm: new Date().toISOString() };
+    if (publicacao.tentativasPublicacao?.length) {
+        const ultima = publicacao.tentativasPublicacao.at(-1);
+        publicacao.publicacaoReal.tentativaId = ultima.tentativaId;
+        publicacao.publicacaoReal.iniciadoEm = ultima.iniciadoEm;
+    }
+    atualizarHistoricoTentativa(publicacao);
     return publicacao;
 }
 
@@ -144,6 +183,6 @@ function validarEtapa(etapa, publicacao, { midiaPublicaPronta = false, errosDeCo
     return erros;
 }
 
-const Publicacoes = { migrarPublicacao, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo, registrarPublicacao, statusPublicacaoVisual, proximaEtapa, validarEtapa, ETAPAS };
+const Publicacoes = { migrarPublicacao, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo, podeIniciarPublicacao, iniciarTentativa, registrarPublicacao, statusPublicacaoVisual, proximaEtapa, validarEtapa, ETAPAS };
 if (typeof module !== 'undefined') module.exports = Publicacoes;
 else globalThis.Publicacoes = Publicacoes;

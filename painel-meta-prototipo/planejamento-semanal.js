@@ -221,6 +221,8 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
                 data, hora, scheduledAt: new Date(instante).toISOString(), timezone,
                 destinos: ['Instagram'],
                 legenda: midia ? (midia.legenda || '') : '',
+                legendaEditorial: midia ? (midia.legendaEditorial || '') : '',
+                publicacaoId: midia?.publicacaoId || null,
                 status: 'rascunho', approvalSignature: null,
                 variarTexto: config.variarTexto === true, nivelVariacao: config.nivelVariacao || 'Baixa',
                 versao: 1,

@@ -204,7 +204,9 @@ test('painel é servido com os arquivos novos e sem credenciais', async () => {
         assert.equal(painel.status, 200);
         const html = await painel.text();
         assert.match(html, /agendamentos\.js/);
-        for (const rota of ['/painel/agendamentos.js', '/painel/integracao-regras.js', '/painel/painel.js', '/painel/estilo.css']) {
+        assert.match(html, /fluxo-editorial\.js/);
+        assert.match(painel.headers.get('content-security-policy'), /img-src[^;]*https:/);
+        for (const rota of ['/painel/agendamentos.js', '/painel/integracao-regras.js', '/painel/fluxo-editorial.js', '/painel/painel.js', '/painel/estilo.css']) {
             assert.equal((await solicitar(rota)).status, 200, rota);
         }
         for (const rota of ['/.env', '/painel/.env', '/painel/../.env', '/painel/__proto__']) assert.equal((await solicitar(rota)).status, 404, rota);

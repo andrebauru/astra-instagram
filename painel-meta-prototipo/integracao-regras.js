@@ -185,7 +185,6 @@ function validarInstagram(p, regras) {
     const itens = regras.validar(p, Date.now(), { exigirMidia: false, exigirAgenda: false });
     itens.push({ ok: tipoMidiaDefinido(p), texto: 'Tipo de publicação definido' });
     itens.push({ ok: midiasPublicasProntas(p), texto: 'URL HTTPS pública da mídia' });
-    itens.push({ ok: !p.publicacaoReal, texto: 'Este conteúdo ainda não possui tentativa de publicação real' });
     return itens;
 }
 

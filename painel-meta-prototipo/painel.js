@@ -11,6 +11,7 @@
 const R = globalThis.Regras;
 const IR = globalThis.IntegracaoRegras;
 const PS = globalThis.PlanejamentoSemanal;
+const Fluxo = globalThis.FluxoEditorial;
 const $ = id => document.getElementById(id);
 const cliente = IR.criarCliente(location.pathname.startsWith('/painel/') ? location.origin : 'http://127.0.0.1:8080');
 
@@ -79,6 +80,15 @@ async function salvar(silencioso = false) {
 }
 function marcarAlterado() { $('salvamento').textContent = 'Alterações ainda não salvas'; }
 
+/** Captura os campos da etapa antes de persistir, inclusive dados recorrentes. */
+function sincronizarFormularioNoEstado() {
+    for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'hashtags', 'palavras', 'ideias', 'imagemUrl', 'videoUrl', 'legenda', 'titulo']) if ($(campo)) atual[campo] = $(campo).value;
+    for (const [id, campo] of [['site', 'site'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) if ($(id)) atual[campo] = $(id).value;
+    if ($('hashtags-padrao')?.value.trim()) atual.hashtags = $('hashtags-padrao').value.trim();
+    if ($('template-texto')) atual.templateTexto = $('template-texto').value;
+    atual.templateAplicarAutomatico = $('template-auto')?.checked === true;
+}
+
 // ============================================================
 // ABAS / CONTEÚDOS
 // ============================================================
@@ -96,11 +106,13 @@ function abaAtual() {
  */
 async function salvarEAvancar(etapa) {
     const etapaAtual = etapa || abaAtual();
+    sincronizarFormularioNoEstado();
     const erros = Publicacoes.validarEtapa(etapaAtual, atual, {
         midiaPublicaPronta: IR.midiasPublicasProntas(atual),
         errosDeConteudo: R.validar(atual, Date.now(), { exigirMidia: false }).filter(i => !i.ok).map(i => i.texto)
     });
-    await salvar(true);
+    const salvo = await salvar(true);
+    if (!salvo) { avisar('Não foi possível salvar esta etapa. Os dados permanecem na tela e o avanço foi cancelado.'); return false; }
     if (erros.length) {
         avisar(`Salvo, mas há pendências nesta etapa: ${erros.map(e => `${e.campo} — ${e.mensagem}`).join(' · ')}. Não avançando.`);
         registrar('salvar_bloqueado', { etapa: etapaAtual, campos: erros.map(e => e.campo) });
@@ -126,7 +138,16 @@ function abrirAba(nome, foco = false) {
     if (nome === 'revisao') renderizarRevisao();
     if (nome === 'agendamento') renderizarStatusPublicacao();
     if (nome === 'desempenho') renderizarDesempenho();
+    atualizarRodapeEtapa(nome);
     registrar('tab_change', { tab: nome });
+}
+
+/** Mantém o botão de persistência associado visualmente à etapa aberta. */
+function atualizarRodapeEtapa(nome = abaAtual()) {
+    const rotulos = { midia: 'Mídia', informacoes: 'Informações', ia: 'IA', revisao: 'Revisão', agendamento: 'Agendamento', desempenho: 'Desempenho' };
+    const proxima = Publicacoes.proximaEtapa(nome);
+    $('etapa-salvar').textContent = `Etapa ${rotulos[nome] || nome}`;
+    $('salvar').textContent = proxima ? `Salvar e continuar para ${rotulos[proxima]}` : 'Salvar alterações';
 }
 
 function novaPublicacao() {
@@ -388,6 +409,8 @@ function renderizarRevisao() {
     $('validacoes').replaceChildren(...validacoes.map(item => elemento('li', `${item.ok ? '✓' : '○'} ${item.texto}`, item.ok ? 'ok' : 'pendente')));
     const pronto = validacoes.every(item => item.ok);
     $('aprovar').disabled = !pronto || atual.estado === 'confirmado';
+    $('decisao-publicacao').hidden = atual.estado !== 'confirmado';
+    $('publicar-agora-revisao').disabled = enviandoPublicacao || !perfilInstagram || !Publicacoes.podeIniciarPublicacao(atual);
     renderizarValidacoesPublicacao(pronto);
 }
 
@@ -409,9 +432,13 @@ function marcarRevisaoHumana() {
 function renderizarValidacoesPublicacao(prontoConteudo) {
     const itens = IR.validarInstagram(atual, R);
     $('validacoes-publicacao').replaceChildren(...itens.map(item => elemento('li', `${item.ok ? '✓' : '○'} ${item.texto}`, item.ok ? 'ok' : 'pendente')));
-    const pode = prontoConteudo && itens.every(item => item.ok) && Boolean(perfilInstagram) && atual.estado === 'confirmado';
+    const pode = prontoConteudo && itens.every(item => item.ok) && Boolean(perfilInstagram) && atual.estado === 'confirmado' && Publicacoes.podeIniciarPublicacao(atual);
     $('preparar-publicacao').disabled = enviandoPublicacao || !pode;
-    $('resultado-publicacao').textContent = atual.publicacaoReal ? (atual.publicacaoReal.estado === 'publicado' ? `Publicada · ID ${atual.publicacaoReal.idPublicado}` : `${atual.publicacaoReal.mensagem || 'Resultado não confirmado.'}`) : (perfilInstagram ? 'Conexão verificada. Confirme o conteúdo para publicar.' : 'Use "Testar Instagram" antes de publicar.');
+    $('resultado-publicacao').textContent = atual.statusPublicacao === 'falhou'
+        ? `${atual.erroPublicacao || 'A tentativa falhou.'} Você pode corrigir o conteúdo e tentar novamente.`
+        : atual.publicacaoReal?.estado === 'publicado'
+            ? `Publicada · ID ${atual.publicacaoReal.idPublicado}`
+            : perfilInstagram ? 'Conexão verificada. A publicação só começa após clicar em “Publicar agora”.' : 'Use "Testar Instagram" antes de publicar.';
 }
 
 // ============================================================
@@ -538,6 +565,8 @@ function renderizarStatusPublicacao() {
 
 function prepararPublicacao() {
     if (atual.statusPublicacao === 'publicado') { avisar('Esta publicação já foi enviada ao Instagram.'); return; }
+    if (atual.statusPublicacao === 'publicando' || enviandoPublicacao) { avisar('Já existe uma tentativa em andamento.'); return; }
+    if (!perfilInstagram) { avisar('Teste a conexão do Instagram antes de publicar.'); return; }
     if (atual.estado !== 'confirmado' || IR.validarInstagram(atual, R).some(i => !i.ok)) { avisar('Confirme o conteúdo na Revisão antes de publicar.'); return; }
     const entrada = montarEntradaPublicacao();
     confirmacaoAtual = { id: atual.id, assinatura: IR.assinaturaConteudo(atual), entrada, conta: perfilInstagram?.destinoId || null };
@@ -556,10 +585,10 @@ async function confirmarPublicacao() {
     if (!confirmacao || enviandoPublicacao || !$('autorizo-publicacao').checked) return;
     if (atual.id !== confirmacao.id || IR.assinaturaConteudo(atual) !== confirmacao.assinatura) { $('confirmacao-publicacao').close(); confirmacaoAtual = undefined; avisar('O conteúdo mudou. Revise novamente.'); return; }
     enviandoPublicacao = true;
-    atual.statusPublicacao = 'publicando';
     $('confirmar-publicacao').disabled = true; $('confirmar-publicacao').textContent = 'Publicando…'; $('cancelar-publicacao').disabled = true;
-    const tentativa = { estado: 'enviando', tentativaId: crypto.randomUUID(), iniciadoEm: new Date().toISOString() };
-    atual.publicacaoReal = tentativa; marcarAlterado(); renderizarStatusPublicacao();
+    const tentativa = Publicacoes.iniciarTentativa(atual, crypto.randomUUID());
+    if (!tentativa) { enviandoPublicacao = false; return; }
+    marcarAlterado(); renderizarStatusPublicacao();
     if (!await salvar(true)) {
         delete atual.publicacaoReal; atual.statusPublicacao = 'nao_publicada';
         enviandoPublicacao = false; $('cancelar-publicacao').disabled = false; $('confirmar-publicacao').disabled = false; $('confirmar-publicacao').textContent = 'Publicar agora';
@@ -616,7 +645,16 @@ function renderizarAnteriores() {
     anteriores.forEach(item => {
         const cartao = elemento('button', undefined, 'cartao-anterior');
         cartao.type = 'button';
-        if (item.miniatura) { const img = elemento('img'); img.src = item.miniatura; img.alt = 'Miniatura'; img.loading = 'lazy'; cartao.append(img); }
+        const moldura = elemento('span', 'Carregando…', 'miniatura-anterior');
+        const fontes = Array.isArray(item.miniaturas) && item.miniaturas.length ? item.miniaturas : (item.miniatura ? [item.miniatura] : []);
+        if (fontes.length) {
+            const img = elemento('img'); img.alt = `Miniatura de ${item.formato || 'publicação'}`; img.loading = 'lazy'; img.hidden = true;
+            let indiceFonte = 0;
+            img.onload = () => { img.hidden = false; moldura.textContent = ''; moldura.append(img); };
+            img.onerror = () => { indiceFonte += 1; if (indiceFonte < fontes.length) img.src = fontes[indiceFonte]; else { img.remove(); moldura.textContent = 'Sem miniatura'; } };
+            img.src = fontes[0]; moldura.replaceChildren(img);
+        } else moldura.textContent = 'Sem miniatura';
+        cartao.append(moldura);
         const info = elemento('div');
         info.append(elemento('strong', `${item.formato || 'publicação'}`), elemento('small', item.publicadoEm ? new Date(item.publicadoEm).toLocaleString('pt-BR') : 'data n/i'));
         info.append(elemento('p', trecho(item.legenda) || '(sem legenda)', 'nota'));
@@ -809,22 +847,28 @@ async function gerarPeriodo() {
     const config = lerConfigPeriodo();
     const melhoresHorarios = (analiseAtual?.melhoresHorarios || []).length ? analiseAtual.melhoresHorarios : (await analisarHorarios())?.melhoresHorarios || [];
     const plano = PS.planejarPeriodo(config, ctxMidias(), { melhoresHorarios });
+    plano.sincronizacao = { estado: 'rascunho_local', confirmadoEm: null, erro: null };
     planoPeriodo = plano;
     selecionadosPeriodo = new Set(plano.itens.map(i => i.id));
+    await persistirPlanoPeriodo();
     renderizarPeriodoPrevia();
-    $('periodo-confirmar').disabled = !plano.itens.length;
-    $('periodo-status').textContent = plano.erros.length ? plano.erros.join(' ') : `Prévia com ${plano.itens.length} publicação(ões). Confirme para agendar.`;
+    const exigeIa = plano.itens.some(item => item.variarTexto);
+    const iaDisponivel = servidorOnline && modelosDisponiveis.some(modelo => modelo.id === $('modelo-astra').value);
+    $('periodo-confirmar').disabled = !plano.itens.length || (exigeIa && !iaDisponivel);
+    $('periodo-confirmar').textContent = exigeIa && !iaDisponivel ? 'IA indisponível' : 'Confirmar plano';
+    $('periodo-status').textContent = plano.erros.length ? plano.erros.join(' ') : exigeIa && !iaDisponivel ? 'A variação por IA está selecionada, mas a IA não está disponível. Escolha um modelo válido ou desative a variação.' : `Rascunho local com ${plano.itens.length} publicação(ões). Confirme para sincronizar com o servidor.`;
     $('periodo-status').className = plano.erros.length ? 'pendente' : 'ok';
 }
 
-function ctxMidias() { return globalThis.AstraContexto?.obterMidias?.() || bibliotecaMidias; }
+function ctxMidias() { return Fluxo.prepararMidiasParaAgenda(globalThis.AstraContexto?.obterMidias?.() || bibliotecaMidias, conteudos); }
 
 function renderizarPeriodoPrevia() {
     const container = $('periodo-previa'); container.replaceChildren();
     if (!planoPeriodo) return;
     for (const item of planoPeriodo.itens) {
         const linha = elemento('div', undefined, 'agenda-item');
-        linha.append(elemento('div', `${item.data} ${item.hora} · ${item.tipo} · ${item.status} · v${item.versao}${item.variarTexto ? ' · variação ' + item.nivelVariacao : ''}`));
+        const sincronizacao = planoPeriodo.sincronizacao?.estado ? ` · ${planoPeriodo.sincronizacao.estado.replaceAll('_', ' ')}` : '';
+        linha.append(elemento('div', `${item.data} ${item.hora} · ${item.tipo} · ${item.status} · v${item.versao}${item.variarTexto ? ' · variação ' + item.nivelVariacao : ''}${sincronizacao}`));
         linha.append(elemento('p', trecho(item.legenda) || '(legenda vazia)', 'nota'));
         container.append(linha);
     }
@@ -832,36 +876,48 @@ function renderizarPeriodoPrevia() {
 
 /** Opcionalmente varia apenas a parte principal, preservando template/links/hashtags. */
 async function aplicarVariacoes(plano) {
-    if (!plano?.itens?.some(i => i.variarTexto)) return plano;
-    for (const item of plano.itens) {
-        if (!item.variarTexto || !item.legenda) continue;
-        try {
-            const modelo = modelosDisponiveis.find(m => m.id === $('modelo-astra').value);
-            if (!modelo) break;
-            const protegidas = R.partesProtegidas(atual);
-            const resposta = await cliente.solicitar('/astra/generate', { prompt: `Reescreva levemente (nível ${item.nivelVariacao}) mantendo TODAS estas partes exatamente: ${protegidas.join(' | ')}. Retorne só a legenda.\n\nLegenda:\n${item.legenda}`, model: modelo.id }, { prazo: 90000 });
-            const variacao = resposta.astra?.text?.trim();
-            const validacao = R.validarVariacao(item.legenda, variacao, protegidas);
-            if (validacao.valido) { item.legenda = variacao; item.versao = (item.versao || 1) + 1; }
-        } catch { /* mantém o texto original se a IA falhar */ }
-    }
-    return plano;
+    if (!plano?.itens?.some(i => i.variarTexto)) return structuredClone(plano);
+    const modelo = modelosDisponiveis.find(m => m.id === $('modelo-astra').value);
+    if (!servidorOnline || !modelo) throw Object.assign(new Error('A IA precisa estar online e com um modelo válido antes de confirmar variações.'), { codigo: 'VARIACAO_IA_INDISPONIVEL' });
+    return Fluxo.aplicarVariacoes(plano, {
+        localizarConteudo: (publicacaoId, mediaId) => conteudos.find(item => item.id === publicacaoId) || conteudos.find(item => (item.imagens || []).some(midia => midia.id === mediaId)),
+        gerarTexto: async ({ texto, nivel }) => {
+            const prompt = `Reescreva somente a parte editorial abaixo com variação ${nivel}. Não acrescente hashtags, links, telefones, endereços ou texto fixo. Retorne somente o novo texto editorial.\n\nTexto editorial:\n${texto}`;
+            const resposta = await cliente.solicitar('/astra/generate', { prompt, model: modelo.id }, { prazo: 120000 });
+            return resposta.astra?.text;
+        }
+    });
 }
 
 async function confirmarPeriodo() {
     if (!planoPeriodo || !planoPeriodo.itens.length) { avisar('Gere o agendamento antes de confirmar.'); return; }
-    $('periodo-confirmar').disabled = true;
-    await aplicarVariacoes(planoPeriodo);
-    planoPeriodo = PS.aprovar(planoPeriodo);
-    let sincronizado = null;
-    try { sincronizado = await cliente.solicitar('/agenda/planos', { planos: [planoPeriodo] }, { prazo: 15000 }); }
-    catch (erro) { avisar(`Plano aprovado localmente; servidor não confirmou: ${erro.message}`); }
+    if (planoPeriodo.sincronizacao?.estado === 'sincronizando' || planoPeriodo.sincronizacao?.estado === 'confirmado_servidor') return;
+    const botao = $('periodo-confirmar'); botao.disabled = true; botao.textContent = planoPeriodo.itens.some(item => item.variarTexto && !item.variacaoConcluida) ? 'Gerando variações…' : 'Sincronizando…';
+    $('periodo-status').textContent = botao.textContent; $('periodo-status').className = 'nota';
+    try {
+        planoPeriodo = await Fluxo.sincronizarPlano(planoPeriodo, {
+            prepararVariacoes: aplicarVariacoes,
+            aprovar: PS.aprovar,
+            enviar: plano => cliente.solicitar('/agenda/planos', { planos: [plano] }, { prazo: 20000 })
+        });
+        await persistirPlanoPeriodo();
+        $('periodo-status').textContent = `Plano confirmado pelo servidor: ${planoPeriodo.itens.length} publicação(ões) agendada(s).`;
+        $('periodo-status').className = 'ok'; botao.textContent = 'Confirmado pelo servidor';
+        registrar('periodo_confirmado', { itens: planoPeriodo.itens.length });
+    } catch (erro) {
+        planoPeriodo = erro.planoRecuperavel || { ...planoPeriodo, status: 'rascunho', sincronizacao: { estado: 'falhou', erro: erro.message } };
+        await persistirPlanoPeriodo();
+        $('periodo-status').textContent = `Falha ao confirmar no servidor: ${erro.message} O rascunho foi preservado.`;
+        $('periodo-status').className = 'pendente'; botao.disabled = false; botao.textContent = 'Tentar novamente';
+        registrar('periodo_falhou', { code: erro.codigo, message: erro.message });
+    }
     renderizarPeriodoPrevia();
-    $('periodo-status').textContent = sincronizado
-        ? `Plano confirmado: ${planoPeriodo.itens.length} publicação(ões) agendada(s).`
-        : 'Plano aprovado localmente; o servidor de execução não confirmou.';
-    $('periodo-status').className = sincronizado ? 'ok' : 'pendente';
-    registrar('periodo_confirmado', { itens: planoPeriodo.itens.length });
+}
+
+/** Persiste a prévia local para permitir retry sem perder os campos. */
+async function persistirPlanoPeriodo() {
+    if (!banco || !planoPeriodo) return false;
+    try { await salvarArmazenamento('plano-periodo-rascunho', planoPeriodo); return true; } catch { return false; }
 }
 
 // ============================================================
@@ -886,10 +942,11 @@ function conectarCampos() {
         if (!IR.midiasPublicasProntas(atual) || R.validar(atual, Date.now(), { exigirMidia: false }).some(i => !i.ok)) { renderizarRevisao(); avisar('Ainda há pendências.'); return; }
         atual.estado = 'confirmado'; marcarAlterado(); renderizarRevisao();
         const salvo = await salvar(true);
-        avisar('Conteúdo confirmado');
-        if (salvo) abrirAba('agendamento');
+        avisar(salvo ? 'Conteúdo confirmado. Escolha publicar agora ou ir para o agendamento.' : 'Conteúdo confirmado nesta aba, mas ainda não foi persistido.');
     };
     $('salvar').onclick = () => salvarEAvancar();
+    $('publicar-agora-revisao').onclick = prepararPublicacao;
+    $('ir-agendamento').onclick = async () => { sincronizarFormularioNoEstado(); if (await salvar(true)) abrirAba('agendamento'); else avisar('Não foi possível salvar; o agendamento não foi aberto.'); };
     $('salvar-recorrentes').onclick = salvarRecorrentesEmpresa;
     $('preparar-publicacao').onclick = prepararPublicacao;
     $('cancelar-publicacao').onclick = () => { confirmacaoAtual = undefined; $('confirmacao-publicacao').close(); };
@@ -898,7 +955,6 @@ function conectarCampos() {
     $('confirmacao-publicacao').oncancel = event => { if (enviandoPublicacao) event.preventDefault(); else confirmacaoAtual = undefined; };
     $('atualizar-conexao').onclick = verificarServidor;
     $('testar-instagram').onclick = verificarInstagram;
-    $('salvar').onclick = () => salvar(false);
     $('nova').onclick = novaPublicacao;
     $('conteudo-atual').onchange = () => trocarConteudo($('conteudo-atual').value);
     $('template-salvar').onclick = salvarTemplatePadrao;
@@ -938,12 +994,22 @@ async function iniciar() {
         if (Array.isArray(midiasSalvas)) bibliotecaMidias = midiasSalvas;
         const salvos = await lerArmazenamento('conteudos');
         if (Array.isArray(salvos) && salvos.length) { conteudos = salvos.map(p => Publicacoes.migrarPublicacao(p)); atual = conteudos[0]; $('salvamento').textContent = 'Conteúdos restaurados deste navegador'; }
+        const planoSalvo = await lerArmazenamento('plano-periodo-rascunho');
+        if (planoSalvo?.id && Array.isArray(planoSalvo.itens)) planoPeriodo = planoSalvo;
         try { const config = await cliente.solicitar('/empresa/template-padrao', undefined, { prazo: 10000 }); if (config?.templatePadrao) templatePadrao = config.templatePadrao; } catch { /* offline */ }
     } catch { avisar('Armazenamento local indisponível.'); }
     if (!atual.templateTexto && templatePadrao.texto) atual.templateTexto = templatePadrao.texto;
     IR.sincronizarUrlsPublicas(atual);
     sincronizarCampos(); carregarTemplateNoCampo(); atualizarSeletorConteudos(); preencherCamposRecorrentes();
+    atualizarRodapeEtapa();
     renderizarMidias(); renderizarRevisao(); renderizarPeriodoPrevia(); renderizarAnalise(); renderizarDesempenho(); renderizarBaseAnalise(); renderizarStatusPublicacao();
+    if (planoPeriodo) {
+        const confirmado = planoPeriodo.sincronizacao?.estado === 'confirmado_servidor';
+        $('periodo-confirmar').disabled = confirmado;
+        $('periodo-confirmar').textContent = confirmado ? 'Confirmado pelo servidor' : planoPeriodo.sincronizacao?.estado === 'falhou' ? 'Tentar novamente' : 'Confirmar plano';
+        $('periodo-status').textContent = confirmado ? 'Plano confirmado pelo servidor.' : planoPeriodo.sincronizacao?.erro ? `Rascunho recuperado: ${planoPeriodo.sincronizacao.erro}` : 'Rascunho local recuperado.';
+        $('periodo-status').className = confirmado ? 'ok' : 'pendente';
+    }
     restaurarDatasPeriodo();
     window.iniciarDiagnostico?.((rota, corpo, opcoes) => cliente.solicitar(rota, corpo, opcoes));
     verificarServidor(); carregarModelos(); carregarAnteriores(true); carregarRecorrentes();
