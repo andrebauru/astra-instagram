@@ -1,5 +1,7 @@
 'use strict';
 
+const regrasSemanal = (typeof require === 'function') ? require('./regras') : globalThis.Regras;
+
 /*
  * Planejamento semanal (somente Instagram).
  *
@@ -125,6 +127,123 @@ function criarCarrossel(midias, capacidades = {}) {
     return { id: globalThis.crypto.randomUUID(), tipo: 'carrossel', itens: midias.map((item, ordem) => ({ mediaId: item.id, ordem, tipo: item.tipo, url: urlDaMidia(item) })), ordem: midias.map(item => item.id), status: 'rascunho' };
 }
 
+const HORARIOS_PADRAO = ['12:00', '20:00'];
+
+/** Resolve o instante do fim do período (fim do dia, no fuso). */
+function fimDoPeriodo(fim, timezone) {
+    const instantes = regrasSemanal.instantes(fim, '23:59', timezone);
+    if (instantes.length) return Math.max(...instantes);
+    const fallback = Date.parse(`${fim}T23:59:59Z`);
+    return Number.isFinite(fallback) ? fallback : Infinity;
+}
+
+/**
+ * Planeja N publicações ao longo de um período, respeitando dias permitidos,
+ * intervalo mínimo/máximo, data final e timezone. Determinístico.
+ *
+ * @param {object} config inicio, fim, timezone, quantidade|porDia, intervaloMinimoHoras,
+ *                        intervaloMaximoHoras, diasPermitidos, estrategiaHorario,
+ *                        horarios, permitirReutilizacao, variarTexto, nivelVariacao
+ * @param {Array} midias estoque (id, tipo, urlPublica, legenda, miniatura)
+ * @param {object} [opcoes] { melhoresHorarios: [{hora, score}], agoraMs }
+ */
+function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
+    const erros = [];
+    const timezone = config.timezone || 'Asia/Tokyo';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(config.inicio || '') || !/^\d{4}-\d{2}-\d{2}$/.test(config.fim || '')) erros.push('Informe data inicial e final.');
+    if ((config.inicio || '') > (config.fim || '')) erros.push('A data inicial deve ser anterior à final.');
+    try { new Intl.DateTimeFormat('pt-BR', { timeZone: timezone }).format(); } catch { erros.push('Timeout zone inválido.'); }
+    const diasPermitidos = Array.isArray(config.diasPermitidos) && config.diasPermitidos.length ? config.diasPermitidos.map(Number) : [0, 1, 2, 3, 4, 5, 6];
+    const intervaloMin = Number(config.intervaloMinimoHoras ?? 8);
+    if (!(intervaloMin >= 0)) erros.push('Intervalo mínimo inválido.');
+    const intervaloMax = Number(config.intervaloMaximoHoras);
+    if (Number.isFinite(intervaloMax) && intervaloMax > 0 && intervaloMax < intervaloMin) erros.push('O intervalo máximo não pode ser menor que o mínimo.');
+
+    const manual = config.estrategiaHorario === 'manual';
+    const horariosManual = Array.isArray(config.horarios) ? config.horarios.filter(h => /^\d{2}:\d{2}$/.test(h)) : [];
+    const melhores = Array.isArray(opcoes.melhoresHorarios) ? opcoes.melhoresHorarios.map(item => item.hora).filter(h => /^\d{2}:\d{2}$/.test(h)) : [];
+    const horariosPreferidos = manual
+        ? (horariosManual.length ? horariosManual : HORARIOS_PADRAO)
+        : (melhores.length ? melhores : (horariosManual.length ? horariosManual : HORARIOS_PADRAO));
+
+    const datas = datasDoPeriodo(config.inicio, config.fim, diasPermitidos);
+    const porDia = Number(config.porDia) || 0;
+    const quantidade = Number.isFinite(Number(config.quantidade)) && Number(config.quantidade) > 0 ? Number(config.quantidade) : (porDia > 0 ? porDia * datas.length : 0);
+    if (quantidade < 1) erros.push('Informe a quantidade de publicações ou publicações por dia.');
+    if (erros.length) return { valido: false, erros, faltam: 0, itens: [] };
+
+    const agoraMs = Number.isFinite(opcoes.agoraMs) ? opcoes.agoraMs : Date.now();
+    const fimMs = fimDoPeriodo(config.fim, timezone);
+
+    const tiposAceitos = config.tipos?.length ? config.tipos : ['imagem', 'video', 'carrossel'];
+    const estoque = (Array.isArray(midias) ? midias : []).filter(m => tiposAceitos.includes(m.tipo) && m.status !== 'utilizada');
+    let indiceMidia = 0;
+    const usadas = new Set();
+    const precisaMidia = estoque.length > 0;
+    if (precisaMidia && !config.permitirReutilizacao && estoque.length < quantidade) {
+        // Ainda gera o que for possível; informa quantas faltam.
+    }
+
+    const itens = [];
+    let ultimoMs = null;
+    let faltamMidia = 0;
+    for (const data of datas) {
+        if (itens.length >= quantidade) break;
+        for (const hora of horariosPreferidos) {
+            if (itens.length >= quantidade) break;
+            const instantes = regrasSemanal.instantes(data, hora, timezone);
+            if (instantes.length !== 1) continue;
+            const instante = instantes[0];
+            if (instante <= agoraMs) continue;
+            if (instante > fimMs) continue;
+            if (ultimoMs !== null) {
+                const deltaHoras = (instante - ultimoMs) / 3600000;
+                if (deltaHoras < intervaloMin) continue;
+                if (Number.isFinite(intervaloMax) && intervaloMax > 0 && deltaHoras > intervaloMax) continue;
+            }
+            let midia = null;
+            if (estoque.length) {
+                if (!config.permitirReutilizacao) {
+                    midia = estoque.find(m => !usadas.has(m.id));
+                } else {
+                    midia = estoque[indiceMidia % estoque.length];
+                }
+                if (!midia) { faltamMidia += 1; continue; }
+                usadas.add(midia.id); indiceMidia += 1;
+            }
+            itens.push({
+                id: `${config.id || 'periodo'}:${data}:${hora}:${itens.length}`,
+                mediaId: midia ? midia.id : null,
+                tipo: midia ? midia.tipo : 'imagem',
+                miniatura: midia ? (midia.miniatura || midia.dados || null) : null,
+                url: midia ? urlDaMidia(midia) : null,
+                itens: midia && Array.isArray(midia.itens) && midia.itens.length ? midia.itens.map((e, ordem) => ({ mediaId: e.id || e.mediaId, ordem, tipo: e.tipo, url: urlDaMidia(e) })) : null,
+                data, hora, scheduledAt: new Date(instante).toISOString(), timezone,
+                destinos: ['Instagram'],
+                legenda: midia ? (midia.legenda || '') : '',
+                status: 'rascunho', approvalSignature: null,
+                variarTexto: config.variarTexto === true, nivelVariacao: config.nivelVariacao || 'Baixa',
+                versao: 1,
+                atraso: config.atraso || 'reagendar', toleranciaMinutos: Number(config.toleranciaMinutos) || 30,
+                resultados: {}
+            });
+            ultimoMs = instante;
+        }
+    }
+
+    const faltam = Math.max(0, quantidade - itens.length);
+    return {
+        valido: faltam === 0 && faltamMidia === 0,
+        erros: faltam ? [`Faltam ${faltam} horário(s) possível(is) no período para atingir a quantidade.`] : (faltamMidia ? [`Faltam ${faltamMidia} mídia(s); ative a reutilização ou adicione mais arquivos.`] : []),
+        faltam, faltamMidia,
+        id: config.id || `periodo-${Date.now()}`,
+        nome: config.nome || 'Plano por período',
+        status: 'rascunho',
+        config: structuredClone(config),
+        itens
+    };
+}
+
 /** Marca as mídias do plano como reservadas. */
 function reservarMidias(plano, midias = []) {
     const usados = new Set((plano.itens || []).flatMap(item => [item.mediaId, ...(item.itens || []).map(entrada => entrada.mediaId)]));
@@ -137,6 +256,6 @@ function liberarMidias(plano, midias = []) {
     return midias.map(midia => midia.status === 'reservada' && (midia.planoId === plano.id || usados.has(midia.id)) ? { ...midia, status: 'disponível', planoId: null } : midia);
 }
 
-const PlanejamentoSemanal = { assinar, validarConfiguracao, pendenciasDeExecucao, embaralharDeterministico, datasDoPeriodo, urlDaMidia, planejar, aprovar, editarItem, pausar, cancelarItem, criarCarrossel, reservarMidias, liberarMidias };
+const PlanejamentoSemanal = { assinar, validarConfiguracao, pendenciasDeExecucao, embaralharDeterministico, datasDoPeriodo, urlDaMidia, planejar, planejarPeriodo, aprovar, editarItem, pausar, cancelarItem, criarCarrossel, reservarMidias, liberarMidias };
 if (typeof module !== 'undefined') module.exports = PlanejamentoSemanal;
 else globalThis.PlanejamentoSemanal = PlanejamentoSemanal;

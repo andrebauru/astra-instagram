@@ -18,18 +18,61 @@ function normalizarLegenda(texto = '') {
     return String(texto).split(/\r?\n/).map(linha => linha.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** Compõe a legenda final com hashtags obrigatórias, local e sites (uma vez cada). */
+/**
+ * Compõe a legenda final: conteúdo principal + template padrão + informações +
+ * sites + hashtags obrigatórias, sem duplicar linhas, sites ou hashtags.
+ */
 function compor(publicacao) {
     const obrigatorias = [...new Set(String(publicacao.hashtags || '').trim().split(/\s+/).filter(Boolean))];
-    const corpo = normalizarLegenda(publicacao.legenda || '').replace(/#[\p{L}\p{N}_]+/gu, tag => obrigatorias.includes(tag) ? '' : tag).replace(/[ \t]+\n/g, '\n').trim();
-    const local = publicacao.incluir?.local && publicacao.local?.trim() ? [publicacao.local.trim()] : [];
+    const semTagsObrigatorias = texto => normalizarLegenda(texto || '').replace(/#[\p{L}\p{N}_]+/gu, tag => obrigatorias.includes(tag) ? '' : tag).replace(/[ \t]+\n/g, '\n').trim();
+
+    const corpo = semTagsObrigatorias(publicacao.legenda);
+    const template = semTagsObrigatorias(publicacao.templateTexto);
+    const local = publicacao.incluir?.local && publicacao.local?.trim() ? publicacao.local.trim() : '';
+    const baseSites = [corpo, template].join('\n');
     const sites = [];
     for (const chave of ['maps', 'site1', 'site2']) {
         const valor = publicacao.incluir?.[chave] && publicacao[chave]?.trim();
-        const escapado = valor ? valor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
-        if (valor && !sites.includes(valor) && !(escapado && new RegExp(`(^|\\n)${escapado}(?=\\n|$)`).test(corpo))) sites.push(valor);
+        if (!valor || sites.includes(valor)) continue;
+        const escapado = valor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (!new RegExp(`(^|\\n)${escapado}(?=\\n|$)`).test(baseSites)) sites.push(valor);
     }
-    return normalizarLegenda([corpo, local.join('\n'), sites.join('\n'), obrigatorias.join(' ')].filter(Boolean).join('\n\n'));
+
+    const blocos = [corpo, template, local, sites.join('\n'), obrigatorias.join(' ')].filter(bloco => bloco && bloco.trim());
+    const vistas = new Set();
+    const linhas = [];
+    for (const bloco of blocos) {
+        for (const linha of bloco.split('\n')) {
+            const chave = linha.trim();
+            if (!chave) { linhas.push(''); continue; }
+            if (vistas.has(chave)) continue;
+            vistas.add(chave); linhas.push(linha.trimEnd());
+        }
+        linhas.push('');
+    }
+    return normalizarLegenda(linhas.join('\n'));
+}
+
+/** Linhas protegidas que variações de IA nunca podem alterar ou remover. */
+function partesProtegidas(publicacao) {
+    const protegidas = new Set();
+    for (const linha of linhas(publicacao.templateTexto)) protegidas.add(linha);
+    for (const tag of hashtags(publicacao.hashtags)) protegidas.add(tag);
+    for (const chave of ['maps', 'site1', 'site2', 'local']) {
+        const valor = (publicacao[chave] || '').trim();
+        if (valor) protegidas.add(valor);
+    }
+    const links = String(publicacao.templateTexto || '').match(/https?:\/\/[^\s]+/g) || [];
+    for (const link of links) protegidas.add(link);
+    return [...protegidas].filter(Boolean);
+}
+
+/** Aceita uma variação somente se mantiver todas as partes protegidas. */
+function validarVariacao(original, variacao, protegidas = []) {
+    if (typeof variacao !== 'string' || !variacao.trim()) return { valido: false, motivo: 'Variação vazia.' };
+    const faltando = protegidas.filter(parte => !variacao.includes(parte));
+    if (faltando.length) return { valido: false, motivo: `A variação removeu conteúdo protegido: ${faltando.slice(0, 3).join(', ')}` };
+    return { valido: true, motivo: null };
 }
 
 /** Resolve horário civil no fuso, recusando horários inexistentes ou ambíguos. */
@@ -84,6 +127,7 @@ function criarConteudo() {
         imagemUrl: '', videoUrl: '',
         tema: '', fatos: '', fatosIa: '', textoMidia: '', contexto: '', objetivo: '',
         legenda: '',
+        templateTexto: '', templateAplicarAutomatico: false,
         hashtags: '', palavras: '', ideias: '',
         revisoes: [],
         local: '', maps: '', site1: '', site2: '',
@@ -101,6 +145,6 @@ function simularLegenda(p, reescrever = false) {
     return texto;
 }
 
-const Regras = { linhas, hashtags, normalizarLegenda, compor, instantes, validar, criarConteudo, simularLegenda };
+const Regras = { linhas, hashtags, normalizarLegenda, compor, partesProtegidas, validarVariacao, instantes, validar, criarConteudo, simularLegenda };
 if (typeof module !== 'undefined') module.exports = Regras;
 else globalThis.Regras = Regras;

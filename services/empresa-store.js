@@ -44,7 +44,9 @@ function criarStoreEmpresa(caminho) {
         lerTemplate: () => ler().template || null,
         salvarTemplate: template => atualizar('template', template),
         lerAgenda: () => ler().agenda || null,
-        salvarAgenda: agenda => atualizar('agenda', agenda)
+        salvarAgenda: agenda => atualizar('agenda', agenda),
+        lerTemplatePadrao: () => ler().templatePadrao || null,
+        salvarTemplatePadrao: template => atualizar('templatePadrao', template)
     };
 }
 

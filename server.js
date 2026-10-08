@@ -23,6 +23,7 @@ const { config, capacidades } = require('./services/config');
 const { criarAIService } = require('./services/ai-service');
 const { criarMediaService } = require('./services/media-service');
 const { criarInstagramService } = require('./services/instagram-service');
+const { criarInsightsService } = require('./services/insights-service');
 const { criarMotor, criarArmazenamentoArquivo, publicarItemNoInstagram } = require('./services/scheduler-service');
 const { criarStoreEmpresa } = require('./services/empresa-store');
 
@@ -55,6 +56,11 @@ if (config.instagram.token) {
         contexto: () => contextoOperacao.getStore() || {}
     });
 }
+
+// InsightsService (publicações anteriores + métricas orgânicas) só existe com Instagram configurado.
+const insightsService = instagramService
+    ? criarInsightsService({ instagram: instagramService, caminhoCache: config.arquivos.metricas })
+    : null;
 
 // O scheduler reutiliza o adaptador único do SchedulerService, que chama
 // InstagramService.publish() exatamente como a publicação imediata.
@@ -202,6 +208,10 @@ async function tratarRequisicao(req, res) {
                     companyConfig: 'GET /empresa/config',
                     companyTemplate: 'POST /empresa/template',
                     companyAgenda: 'POST /empresa/agenda',
+                    companyTemplatePadrao: 'GET/POST /empresa/template-padrao',
+                    instagramPreviousMedia: 'GET /instagram/media',
+                    instagramMetricsUpdate: 'POST /instagram/metrics/update',
+                    instagramAnalysis: 'GET /instagram/analysis',
                     diagnostics: 'GET /diagnostico/status'
                 }
             });
@@ -253,6 +263,36 @@ async function tratarRequisicao(req, res) {
                 return { success: true, containerId: publicacao.containerId, published: { id: publicacao.mediaId }, formato: publicacao.formato };
             });
             sendJSON(res, 200, resultado);
+            return;
+        }
+
+        // ------------------------------------------------
+        // PUBLICAÇÕES ANTERIORES / MÉTRICAS ORGÂNICAS / ANÁLISE
+        // ------------------------------------------------
+
+        if (req.method === 'GET' && url.pathname === '/instagram/media') {
+            if (!insightsService) throw erroSeguro('INSTAGRAM_NAO_CONFIGURADO', 'Instagram não configurado no servidor.', 503);
+            const pagina = await insightsService.listarMidias({ limite: url.searchParams.get('limite'), cursor: url.searchParams.get('cursor') });
+            sendJSON(res, 200, { success: true, ...pagina });
+            return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/instagram/metrics/update') {
+            if (!insightsService) throw erroSeguro('INSTAGRAM_NAO_CONFIGURADO', 'Instagram não configurado no servidor.', 503);
+            const body = await readJSONBody(req);
+            const itens = (Array.isArray(body.itens) ? body.itens : [])
+                .filter(item => item && /^[A-Za-z0-9_.-]{1,200}$/.test(String(item.id || '')))
+                .slice(0, 100)
+                .map(item => ({ id: String(item.id), formato: typeof item.formato === 'string' ? item.formato.slice(0, 20) : null, publicadoEm: typeof item.publicadoEm === 'string' ? item.publicadoEm : null, permalink: typeof item.permalink === 'string' ? item.permalink.slice(0, 500) : '' }));
+            const resultado = await insightsService.atualizarMetricas(itens, { forcar: body.forcar === true });
+            sendJSON(res, 200, { success: true, ...resultado, total: insightsService.metricas().length });
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/instagram/analysis') {
+            if (!insightsService) throw erroSeguro('INSTAGRAM_NAO_CONFIGURADO', 'Instagram não configurado no servidor.', 503);
+            const timezone = url.searchParams.get('timezone') || config.timezone;
+            sendJSON(res, 200, { success: true, ...insightsService.analisar({ timezone }) });
             return;
         }
 
@@ -354,6 +394,24 @@ async function tratarRequisicao(req, res) {
             const agenda = sanitizarAgendaEmpresa(body.agenda ?? body);
             storeEmpresa.salvarAgenda(agenda);
             sendJSON(res, 200, { success: true, agenda });
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/empresa/template-padrao') {
+            const salvo = storeEmpresa.lerTemplatePadrao() || {};
+            sendJSON(res, 200, { success: true, templatePadrao: { texto: typeof salvo.texto === 'string' ? salvo.texto : '', aplicarAutomatico: salvo.aplicarAutomatico === true } });
+            return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/empresa/template-padrao') {
+            const body = await readJSONBody(req);
+            const bruto = body.templatePadrao ?? body;
+            const templatePadrao = {
+                texto: typeof bruto.texto === 'string' ? bruto.texto.slice(0, 10000) : '',
+                aplicarAutomatico: bruto.aplicarAutomatico === true
+            };
+            storeEmpresa.salvarTemplatePadrao(templatePadrao);
+            sendJSON(res, 200, { success: true, templatePadrao });
             return;
         }
 

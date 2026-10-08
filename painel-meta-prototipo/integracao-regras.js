@@ -172,7 +172,7 @@ function montarPrompt(p, reescrever = false, comImagem = false) {
 /** Captura o que precisa permanecer igual durante geração/confirmação. */
 function assinaturaConteudo(p) {
     return JSON.stringify({
-        legenda: p.legenda, tema: p.tema, fatos: p.fatos, fatosIa: p.fatosIa, textoMidia: p.textoMidia, contexto: p.contexto, objetivo: p.objetivo,
+        legenda: p.legenda, templateTexto: p.templateTexto, tema: p.tema, fatos: p.fatos, fatosIa: p.fatosIa, textoMidia: p.textoMidia, contexto: p.contexto, objetivo: p.objetivo,
         hashtags: p.hashtags, palavras: p.palavras, ideias: p.ideias, revisoes: p.revisoes,
         incluir: p.incluir, local: p.local, maps: p.maps, site1: p.site1, site2: p.site2,
         tipoMidia: p.tipoMidia, imagemUrl: p.imagemUrl, videoUrl: p.videoUrl,
@@ -196,8 +196,9 @@ function criarCliente(base, transporte = globalThis.fetch) {
     const ROTAS = [
         '/health', '/meta/me', '/media/upload/capabilities', '/media/upload',
         '/astra/models', '/astra/generate', '/instagram/publish',
+        '/instagram/media', '/instagram/metrics/update', '/instagram/analysis',
         '/agenda/planos', '/agenda/executar', '/agenda/pausar', '/agenda/retomar', '/agenda/reagendar', '/agenda/cancelar',
-        '/empresa/config', '/empresa/template', '/empresa/agenda',
+        '/empresa/config', '/empresa/template', '/empresa/agenda', '/empresa/template-padrao',
         '/diagnostico/access', '/diagnostico/status', '/diagnostico/event', '/diagnostico/start', '/diagnostico/stop', '/diagnostico/mark', '/diagnostico/export'
     ];
     const mensagens = {
@@ -239,6 +240,8 @@ function criarCliente(base, transporte = globalThis.fetch) {
         CARROSSEL_INVALIDO: 'Informe de 2 a 20 itens compatíveis, cada um com URL pública.',
         PLANO_NAO_ENCONTRADO: 'Plano ou item não encontrado no servidor.',
         PROMPT_INVALIDO: 'Informe um prompt textual válido.',
+        METRICA_ID_INVALIDO: 'Informe um ID de mídia válido.',
+        INSIGHTS_FALHA: 'Não foi possível consultar os insights desta mídia.',
         ORIGEM_RECUSADA: 'O servidor recusou a origem do painel. Abra pelo endereço local configurado.'
     };
 

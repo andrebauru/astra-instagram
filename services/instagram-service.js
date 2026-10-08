@@ -89,6 +89,60 @@ function criarInstagramService({
         return request('me', 'GET', { fields: 'id,username,account_type,media_count' }, 'instagram_profile');
     }
 
+    const CAMPOS_MIDIA = 'id,caption,timestamp,media_type,media_url,thumbnail_url,permalink,media_product_type,children{id,media_type,media_url,thumbnail_url,timestamp,media_product_type}';
+
+    /** Lista publicações anteriores do Instagram com paginação por cursor. */
+    async function listarMidias({ limite = 25, cursor = null } = {}) {
+        const host = (() => { try { return new URL(base).hostname; } catch { return ''; } })();
+        const caminho = host === 'graph.instagram.com' ? 'me/media' : `${conta}/media`;
+        const resposta = await request(caminho, 'GET', {
+            fields: CAMPOS_MIDIA,
+            limit: Math.min(100, Math.max(1, Number(limite) || 25)),
+            ...(cursor ? { after: cursor } : {})
+        }, 'instagram_list_media');
+        const itens = Array.isArray(resposta?.data) ? resposta.data.filter(item => item?.id).map(item => ({
+            id: String(item.id),
+            caption: item.caption,
+            timestamp: item.timestamp,
+            media_type: item.media_type,
+            media_product_type: item.media_product_type,
+            media_url: item.media_url,
+            thumbnail_url: item.thumbnail_url,
+            permalink: item.permalink,
+            children: item.children
+        })) : [];
+        const proximoCursor = resposta?.paging?.next ? (resposta.paging.cursors?.after || resposta.paging.cursors?.before || null) : null;
+        return { itens, proximoCursor };
+    }
+
+    /** Lê insights orgânicos de uma mídia; métricas ausentes permanecem ausentes. */
+    async function insights(mediaId) {
+        if (!/^[A-Za-z0-9_.-]{1,200}$/.test(String(mediaId || ''))) throw erroSeguro('METRICA_ID_INVALIDO', 'Informe um ID de mídia válido.', 400);
+        const comInsights = 'id,timestamp,like_count,comments_count,media_type,insights.metric(reach,impressions,saved,shares,total_interactions,video_views)';
+        let dados;
+        try {
+            dados = await request(mediaId, 'GET', { fields: comInsights }, 'instagram_media_insights');
+        } catch (erro) {
+            // A conta pode não expor uma métrica; recua para as contagens básicas.
+            if (!['META_RECUSOU', 'META_CONFIGURACAO_INVALIDA'].includes(erro.codigo)) throw erro;
+            dados = await request(mediaId, 'GET', { fields: 'id,timestamp,like_count,comments_count,media_type' }, 'instagram_media_basico');
+        }
+        const mapa = Object.fromEntries((dados?.insights?.data || []).map(item => [item.name, item.values?.at(-1)?.value ?? item.value ?? null]));
+        return {
+            id: dados?.id || mediaId,
+            timestamp: dados?.timestamp,
+            like_count: dados?.like_count,
+            comments_count: dados?.comments_count,
+            media_type: dados?.media_type,
+            reach: mapa.reach ?? null,
+            impressions: mapa.impressions ?? null,
+            saved: mapa.saved ?? null,
+            shares: mapa.shares ?? null,
+            total_interactions: mapa.total_interactions ?? null,
+            video_views: mapa.video_views ?? null
+        };
+    }
+
     /** Traduz uma falha real da Meta em um código específico da publicação. */
     function classificarErro(erro, padrao) {
         if (['INSTAGRAM_NAO_AUTENTICADO'].includes(erro.codigo)) return Object.assign(erroSeguro('INSTAGRAM_TOKEN_INVALIDO', erro.message, 401), { metaDetalhe: erro.metaDetalhe });
@@ -198,7 +252,7 @@ function criarInstagramService({
         return { mediaId: String(publicado.id), containerId: container.id, formato: tipo, publicadoEm: new Date().toISOString() };
     }
 
-    return { perfil, publish, request, statusContainer, aguardarContainer, FORMATOS_SUPORTADOS };
+    return { perfil, publish, listarMidias, insights, request, statusContainer, aguardarContainer, FORMATOS_SUPORTADOS };
 }
 
 module.exports = { criarInstagramService, FORMATOS_SUPORTADOS };

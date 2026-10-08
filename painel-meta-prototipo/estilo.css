@@ -70,4 +70,26 @@ footer span{font-size:12px;color:var(--muted)}
 #mensagem:not(:empty){padding:12px 20px}
 dialog{border:1px solid var(--borda);border-radius:14px;padding:22px;max-width:640px;width:calc(100% - 32px);max-height:85vh;overflow:auto;color:#243b37}
 dialog::backdrop{background:#152c2870}
-@media(max-width:760px){.duas-colunas{grid-template-columns:1fr}.marca small,.divisor{display:none}.plano-item{grid-template-columns:1fr}.plano-item>input[type=checkbox]{justify-self:start}.plano-horario{flex-direction:column}.modelo-controles{flex-direction:column;align-items:stretch}}
+.abas{display:flex;gap:2px;border-bottom:1px solid var(--borda);overflow-x:auto;padding:0 8px}
+.abas button{border:0;background:transparent;border-radius:0;padding:12px 12px;font-size:13px;color:var(--muted);white-space:nowrap}
+.abas button[aria-selected=true]{color:var(--verde);box-shadow:inset 0 -3px var(--verde)}
+.layout-editor{display:grid;grid-template-columns:250px minmax(0,1fr);gap:18px;align-items:start}
+.publicacoes-anteriores{background:#fff;border:1px solid var(--borda);border-radius:12px;padding:14px;position:sticky;top:12px;max-height:calc(100vh - 40px);overflow:auto}
+.publicacoes-anteriores .cartao-anterior{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;text-align:left;width:100%;padding:8px;border:1px solid var(--borda);border-radius:8px;background:#fff;margin:6px 0}
+.publicacoes-anteriores .cartao-anterior img{width:64px;height:64px;object-fit:cover;border-radius:6px}
+.publicacoes-anteriores .cartao-anterior p{margin:2px 0 0;font-size:11px;color:var(--muted)}
+.publicacoes-anteriores .cartao-anterior small{font-size:11px;color:var(--muted)}
+.anterior-detalhe .cartao{padding:10px;display:grid;gap:8px}
+#anterior-detalhe{margin-top:10px}
+.editor{background:#fff;border:1px solid var(--borda);border-radius:12px;box-shadow:0 4px 16px #233b3410;min-width:0}
+section[role=tabpanel]{padding:20px;min-height:320px}
+.barra-editor{display:flex;gap:10px;align-items:end;padding:16px 20px;border-bottom:1px solid var(--borda);flex-wrap:wrap}
+.barra-editor .titulo-campo{flex:1;min-width:160px}
+.barra-editor input{font-size:16px;font-weight:600}
+.barra-editor select{width:auto;max-width:220px}
+#metricas-tabela,#desempenho-resumo,#reotimizar-preview,#periodo-previa,#analise-lista{display:grid;gap:6px}
+#reotimizar-preview .agenda-item{background:#f6f8f5;border-radius:6px;padding:8px}
+#reotimizar-preview button{margin-top:8px}
+#metricas-tabela .agenda-item,#desempenho-resumo .agenda-item{border-top:1px solid var(--borda);padding:8px 0;font-size:13px;overflow-wrap:anywhere}
+@media(max-width:1000px){.layout-editor{grid-template-columns:1fr}.publicacoes-anteriores{position:static;max-height:none}}
+@media(max-width:760px){.duas-colunas{grid-template-columns:1fr}.marca small,.divisor{display:none}.plano-item{grid-template-columns:1fr}.modelo-controles{flex-direction:column;align-items:stretch}.abas button{padding:10px 8px;font-size:12px}}

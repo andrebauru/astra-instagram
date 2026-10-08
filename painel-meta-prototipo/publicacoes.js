@@ -16,6 +16,7 @@ function migrarPublicacao(p) {
     p.imagemUrl ??= ''; p.videoUrl ??= '';
     p.tema ??= ''; p.fatos ??= ''; p.fatosIa ??= ''; p.textoMidia ??= ''; p.contexto ??= ''; p.objetivo ??= '';
     p.legenda ??= '';
+    p.templateTexto ??= ''; p.templateAplicarAutomatico ??= false;
     p.hashtags ??= ''; p.palavras ??= ''; p.ideias ??= '';
     p.revisoes ??= [];
     p.local ??= ''; p.maps ??= ''; p.site1 ??= ''; p.site2 ??= '';

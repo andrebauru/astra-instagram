@@ -54,7 +54,8 @@ const config = Object.freeze({
 
     arquivos: Object.freeze({
         empresa: process.env.ASTRA_EMPRESA_ARQUIVO || path.join(RAIZ, 'dados', 'empresa.json'),
-        agendador: process.env.ASTRA_AGENDADOR_ARQUIVO || path.join(RAIZ, 'dados', 'agendamentos.json')
+        agendador: process.env.ASTRA_AGENDADOR_ARQUIVO || path.join(RAIZ, 'dados', 'agendamentos.json'),
+        metricas: process.env.ASTRA_METRICAS_ARQUIVO || path.join(RAIZ, 'dados', 'metricas-organicas.json')
     })
 });
 
