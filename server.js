@@ -11,6 +11,7 @@
 
 const http = require('node:http');
 const crypto = require('node:crypto');
+const path = require('node:path');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { URL } = require('node:url');
 
@@ -19,7 +20,7 @@ const { erroSeguro, ocultarSegredos, autorizarOrigem, publicarUmaVez } = require
 const { instalarEncerramento } = require('./encerramento-servidor');
 const diagnostico = require('./diagnostico');
 
-const { config, capacidades } = require('./services/config');
+const { config, capacidades, RAIZ } = require('./services/config');
 const { criarAIService } = require('./services/ai-service');
 const { criarMediaService } = require('./services/media-service');
 const { criarInstagramService } = require('./services/instagram-service');
@@ -166,14 +167,32 @@ function normalizarPlanoRecebido(plano = {}) {
     };
 }
 
+/** Mantém apenas os dados recorrentes da empresa, sem inventar campos. */
+function sanitizarRecorrentes(valor) {
+    const bruto = valor && typeof valor === 'object' && !Array.isArray(valor) ? valor : {};
+    const texto = campo => typeof bruto[campo] === 'string' ? bruto[campo].slice(0, 5000) : '';
+    const hashtags = String(bruto.hashtagsPadrao || '').trim().split(/\s+/).filter(tag => /^#[\p{L}\p{N}_]+$/u.test(tag));
+    return {
+        site: texto('site'),
+        maps: texto('maps'),
+        linksAdicionais: texto('linksAdicionais'),
+        hashtagsPadrao: hashtags.join(' '),
+        informacoesAdicionais: texto('informacoesAdicionais'),
+        chamadasFixas: texto('chamadasFixas'),
+        templateTexto: texto('templateTexto')
+    };
+}
+
 // ============================================================
 // ROTEAMENTO
 // ============================================================
 
 async function tratarRequisicao(req, res) {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    console.log(`[HTTP] ${req.method} ${url.pathname}`);
+    res.on('finish', () => console.log(`[HTTP] ${url.pathname} status=${res.statusCode}`));
     try {
         autorizarOrigem(req, res);
-        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
         if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
@@ -209,6 +228,7 @@ async function tratarRequisicao(req, res) {
                     companyTemplate: 'POST /empresa/template',
                     companyAgenda: 'POST /empresa/agenda',
                     companyTemplatePadrao: 'GET/POST /empresa/template-padrao',
+                    companyRecorrentes: 'GET/POST /empresa/recorrentes',
                     instagramPreviousMedia: 'GET /instagram/media',
                     instagramMetricsUpdate: 'POST /instagram/metrics/update',
                     instagramAnalysis: 'GET /instagram/analysis',
@@ -260,7 +280,16 @@ async function tratarRequisicao(req, res) {
                 : { formato, mediaUrl: body.mediaUrl, imageUrl: body.imageUrl, videoUrl: body.videoUrl, caption: body.caption || '' };
             const resultado = await publicarUmaVez(req, body, async () => {
                 const publicacao = await instagramService.publish(entrada);
-                return { success: true, containerId: publicacao.containerId, published: { id: publicacao.mediaId }, formato: publicacao.formato };
+                let permalink = null; let publicadoEm = publicacao.publicadoEm;
+                try {
+                    const detalhe = await instagramService.detalheMidia(publicacao.mediaId);
+                    permalink = detalhe.permalink; publicadoEm = detalhe.publicadoEm || publicadoEm;
+                } catch { /* permalink é opcional; o sucesso já foi confirmado pelo media_id */ }
+                if (insightsService) {
+                    insightsService.registrarPublicacaoMidia({ id: publicacao.mediaId, formato: publicacao.formato, publicadoEm, permalink });
+                }
+                console.log(`[HTTP] /instagram/publish media_id=${publicacao.mediaId}`);
+                return { success: true, containerId: publicacao.containerId, published: { id: publicacao.mediaId }, media_id: publicacao.mediaId, permalink, published_at: publicadoEm, formato: publicacao.formato };
             });
             sendJSON(res, 200, resultado);
             return;
@@ -412,6 +441,20 @@ async function tratarRequisicao(req, res) {
             };
             storeEmpresa.salvarTemplatePadrao(templatePadrao);
             sendJSON(res, 200, { success: true, templatePadrao });
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/empresa/recorrentes') {
+            const salvo = storeEmpresa.lerRecorrentes() || {};
+            sendJSON(res, 200, { success: true, recorrentes: sanitizarRecorrentes(salvo) });
+            return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/empresa/recorrentes') {
+            const body = await readJSONBody(req);
+            const recorrentes = sanitizarRecorrentes(body.recorrentes ?? body);
+            storeEmpresa.salvarRecorrentes(recorrentes);
+            sendJSON(res, 200, { success: true, recorrentes });
             return;
         }
 

@@ -19,11 +19,13 @@ function migrarPublicacao(p) {
     p.templateTexto ??= ''; p.templateAplicarAutomatico ??= false;
     p.hashtags ??= ''; p.palavras ??= ''; p.ideias ??= '';
     p.revisoes ??= [];
-    p.local ??= ''; p.maps ??= ''; p.site1 ??= ''; p.site2 ??= '';
-    p.incluir ??= { local: false, maps: false, site1: false, site2: false };
-    p.incluir = { local: p.incluir.local === true, maps: p.incluir.maps === true, site1: p.incluir.site1 === true, site2: p.incluir.site2 === true };
+    p.local ??= ''; p.maps ??= ''; p.site1 ??= ''; p.site2 ??= ''; p.site ??= ''; p.linksAdicionais ??= ''; p.informacoesAdicionais ??= ''; p.chamadasFixas ??= '';
+    p.incluir ??= { local: false, maps: false, site1: false, site2: false, site: false };
+    p.incluir = { local: p.incluir.local === true, maps: p.incluir.maps === true, site1: p.incluir.site1 === true, site2: p.incluir.site2 === true, site: p.incluir.site === true };
     p.fuso ??= 'Asia/Tokyo';
     p.estado ??= 'rascunho';
+    p.statusPublicacao ??= 'nao_publicada';
+    p.instagramMediaId ??= null; p.permalink ??= null; p.publicadoEm ??= null; p.erroPublicacao ??= null;
     p.imagens = (Array.isArray(p.imagens) ? p.imagens : []).map(item => ({
         id: item.id || globalThis.crypto?.randomUUID?.() || `midia-${Date.now()}`,
         nome: item.nome || 'Mídia sem nome',
@@ -83,6 +85,65 @@ function estadoPublicacao(p) {
     return ({ rascunho: 'Em preparação', 'em revisão': 'Em revisão', confirmado: 'Confirmada', agendada: 'Agendada' })[p.estado] || 'Em preparação';
 }
 
-const Publicacoes = { migrarPublicacao, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo };
+/**
+ * Persiste o resultado real da publicação (sucesso ou falha da Meta).
+ * Só é chamada depois de uma resposta confirmada do InstagramService.
+ */
+function registrarPublicacao(publicacao, resultado = {}) {
+    if (!publicacao) return null;
+    if (resultado.erro) {
+        publicacao.statusPublicacao = 'falhou';
+        publicacao.erroPublicacao = resultado.erro;
+        publicacao.publicacaoReal = { estado: 'incerto', mensagem: resultado.erro, idPublicado: publicacao.instagramMediaId || null };
+        return publicacao;
+    }
+    if (!resultado.mediaId) return null;
+    publicacao.statusPublicacao = 'publicado';
+    publicacao.instagramMediaId = resultado.mediaId;
+    publicacao.permalink = resultado.permalink || publicacao.permalink || null;
+    publicacao.publicadoEm = resultado.publicadoEm || new Date().toISOString();
+    publicacao.erroPublicacao = null;
+    publicacao.publicacaoReal = { estado: 'publicado', idPublicado: resultado.mediaId, finalizadoEm: new Date().toISOString() };
+    return publicacao;
+}
+
+/** Estado visual do bloco "STATUS DA PUBLICAÇÃO". */
+function statusPublicacaoVisual(p) {
+    if (p?.statusPublicacao === 'publicado') return { classe: 'ok', texto: `✓ Publicada${p.instagramMediaId ? ` · ID ${p.instagramMediaId}` : ''}${p.publicadoEm ? ` · ${new Date(p.publicadoEm).toLocaleString('pt-BR')}` : ''}` };
+    if (p?.statusPublicacao === 'publicando') return { classe: 'nota', texto: '◌ Publicando…' };
+    if (p?.statusPublicacao === 'falhou') return { classe: 'pendente', texto: `✗ Falhou · ${p.erroPublicacao || 'erro não informado'}` };
+    if (p?.estado === 'agendada' || (p?.data && p?.hora)) return { classe: 'nota', texto: `◷ Agendada para ${p.data} ${p.hora} (${p.fuso})` };
+    return { classe: 'nota', texto: '○ Não publicada' };
+}
+
+/** Etapas do editor e sua ordem; o avanço automático segue exatamente esta lista. */
+const ETAPAS = ['midia', 'informacoes', 'ia', 'revisao', 'agendamento', 'desempenho'];
+
+function proximaEtapa(etapa) {
+    const indice = ETAPAS.indexOf(etapa);
+    return indice >= 0 && indice < ETAPAS.length - 1 ? ETAPAS[indice + 1] : null;
+}
+
+/**
+ * Valida somente o necessário de cada etapa.
+ * Retorna a lista de campos a corrigir; vazia significa etapa liberada.
+ */
+function validarEtapa(etapa, publicacao, { midiaPublicaPronta = false, errosDeConteudo = [] } = {}) {
+    const erros = [];
+    const bloquear = (campo, mensagem) => erros.push({ campo, mensagem });
+    if (!publicacao) { bloquear('Publicação', 'Nenhuma publicação selecionada.'); return erros; }
+    if (etapa === 'midia') {
+        if (!(Array.isArray(publicacao.imagens) && publicacao.imagens.length) && !midiaPublicaPronta) bloquear('Mídia', 'Selecione um arquivo ou informe a URL pública.');
+        else if (Array.isArray(publicacao.imagens) && publicacao.imagens.length && !midiaPublicaPronta) bloquear('URL pública', 'Envie a mídia ou informe a URL HTTPS pública.');
+    }
+    if (etapa === 'ia' && !String(publicacao.legenda || '').trim()) bloquear('Legenda', 'Gere com a Astra ou escreva manualmente.');
+    if (etapa === 'revisao') {
+        for (const texto of errosDeConteudo) bloquear('Revisão', texto);
+        if (!midiaPublicaPronta) bloquear('URL pública', 'A mídia precisa de URL HTTPS pública.');
+    }
+    return erros;
+}
+
+const Publicacoes = { migrarPublicacao, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo, registrarPublicacao, statusPublicacaoVisual, proximaEtapa, validarEtapa, ETAPAS };
 if (typeof module !== 'undefined') module.exports = Publicacoes;
 else globalThis.Publicacoes = Publicacoes;

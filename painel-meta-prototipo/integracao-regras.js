@@ -198,7 +198,7 @@ function criarCliente(base, transporte = globalThis.fetch) {
         '/astra/models', '/astra/generate', '/instagram/publish',
         '/instagram/media', '/instagram/metrics/update', '/instagram/analysis',
         '/agenda/planos', '/agenda/executar', '/agenda/pausar', '/agenda/retomar', '/agenda/reagendar', '/agenda/cancelar',
-        '/empresa/config', '/empresa/template', '/empresa/agenda', '/empresa/template-padrao',
+        '/empresa/config', '/empresa/template', '/empresa/agenda', '/empresa/template-padrao', '/empresa/recorrentes',
         '/diagnostico/access', '/diagnostico/status', '/diagnostico/event', '/diagnostico/start', '/diagnostico/stop', '/diagnostico/mark', '/diagnostico/export'
     ];
     const mensagens = {

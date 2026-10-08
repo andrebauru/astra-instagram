@@ -29,16 +29,28 @@ function compor(publicacao) {
     const corpo = semTagsObrigatorias(publicacao.legenda);
     const template = semTagsObrigatorias(publicacao.templateTexto);
     const local = publicacao.incluir?.local && publicacao.local?.trim() ? publicacao.local.trim() : '';
-    const baseSites = [corpo, template].join('\n');
+    const baseLinks = [corpo, template].join('\n');
     const sites = [];
-    for (const chave of ['maps', 'site1', 'site2']) {
-        const valor = publicacao.incluir?.[chave] && publicacao[chave]?.trim();
+    const candidatos = [
+        publicacao.incluir?.site && publicacao.site?.trim() ? publicacao.site.trim() : '',
+        publicacao.incluir?.maps && publicacao.maps?.trim() ? publicacao.maps.trim() : '',
+        ...String(publicacao.linksAdicionais || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    ];
+    for (const valor of candidatos) {
         if (!valor || sites.includes(valor)) continue;
         const escapado = valor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (!new RegExp(`(^|\\n)${escapado}(?=\\n|$)`).test(baseSites)) sites.push(valor);
+        if (!new RegExp(`(^|\\n)${escapado}(?=\\n|$)`).test(baseLinks)) sites.push(valor);
     }
 
-    const blocos = [corpo, template, local, sites.join('\n'), obrigatorias.join(' ')].filter(bloco => bloco && bloco.trim());
+    const blocos = [
+        corpo,
+        template,
+        String(publicacao.chamadasFixas || '').trim(),
+        String(publicacao.informacoesAdicionais || '').trim(),
+        local,
+        sites.join('\n'),
+        obrigatorias.join(' ')
+    ].filter(bloco => bloco && bloco.trim());
     const vistas = new Set();
     const linhas = [];
     for (const bloco of blocos) {
@@ -57,8 +69,11 @@ function compor(publicacao) {
 function partesProtegidas(publicacao) {
     const protegidas = new Set();
     for (const linha of linhas(publicacao.templateTexto)) protegidas.add(linha);
+    for (const linha of linhas(publicacao.chamadasFixas)) protegidas.add(linha);
+    for (const linha of linhas(publicacao.informacoesAdicionais)) protegidas.add(linha);
+    for (const linha of linhas(publicacao.linksAdicionais)) protegidas.add(linha);
     for (const tag of hashtags(publicacao.hashtags)) protegidas.add(tag);
-    for (const chave of ['maps', 'site1', 'site2', 'local']) {
+    for (const chave of ['maps', 'site', 'site1', 'site2', 'local']) {
         const valor = (publicacao[chave] || '').trim();
         if (valor) protegidas.add(valor);
     }
@@ -100,7 +115,7 @@ function validar(p, agora = Date.now(), opcoes = {}) {
     adicionar(['imagem', 'reel', 'carrossel'].includes(p.tipoMidia), 'Tipo de publicação definido');
     const tags = linhas(p.hashtags).join(' ').split(/\s+/).filter(Boolean);
     adicionar(tags.every(tag => /^#[\p{L}\p{N}_]+$/u.test(tag)), 'Formato das hashtags obrigatórias');
-    for (const chave of ['maps', 'site1', 'site2']) {
+    for (const chave of ['maps', 'site', 'site1', 'site2']) {
         if (!String(p[chave] || '').trim()) continue;
         let ok = false;
         try { const url = new URL(p[chave]); ok = ['http:', 'https:'].includes(url.protocol); } catch { /* inválido */ }
@@ -130,10 +145,12 @@ function criarConteudo() {
         templateTexto: '', templateAplicarAutomatico: false,
         hashtags: '', palavras: '', ideias: '',
         revisoes: [],
-        local: '', maps: '', site1: '', site2: '',
-        incluir: { local: false, maps: false, site1: false, site2: false },
+        local: '', maps: '', site1: '', site2: '', site: '', linksAdicionais: '', informacoesAdicionais: '', chamadasFixas: '',
+        incluir: { local: false, maps: false, site1: false, site2: false, site: false },
         data: '', hora: '', fuso: 'Asia/Tokyo', preferencia: '18:00',
         estado: 'rascunho',
+        statusPublicacao: 'nao_publicada',
+        instagramMediaId: null, permalink: null, publicadoEm: null, erroPublicacao: null,
         publicacaoReal: null
     };
 }

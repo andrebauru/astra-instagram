@@ -94,6 +94,17 @@
           <label>Dicas de tema para a IA<textarea id="palavras" rows="2" placeholder="Uma por linha"></textarea></label>
         </div>
         <label>Ideias obrigatórias<textarea id="ideias" rows="2" placeholder="Uma por linha"></textarea></label>
+        <h3>Links e dados recorrentes</h3>
+        <div class="duas-colunas">
+          <label>Link da página/site<input id="site" type="url" placeholder="https://..."></label>
+          <label>Link Google Maps<input id="maps" type="url" placeholder="https://maps.google..."></label>
+          <label>Links adicionais<textarea id="links-adicionais" rows="2" placeholder="Um por linha (opcional)"></textarea></label>
+          <label>Hashtags padrão<input id="hashtags-padrao" placeholder="#exunojapao #quimbandajapao"></label>
+        </div>
+        <label>Informações adicionais fixas<textarea id="informacoes-fixas" rows="2" placeholder="Informações que quase sempre entram na publicação."></textarea></label>
+        <label>Chamadas fixas<textarea id="chamadas-fixas" rows="2" placeholder="Chamadas recorrentes."></textarea></label>
+        <div class="acoes"><button id="salvar-recorrentes" type="button">Salvar dados recorrentes</button></div>
+        <p id="recorrentes-status" class="nota">Carregando dados recorrentes…</p>
         <h3>Template padrão</h3>
         <label>Texto fixo recorrente (hashtags, links, chamadas)<textarea id="template-texto" rows="4" placeholder="Informações que uso em praticamente todas as postagens."></textarea></label>
         <label class="check"><input type="checkbox" id="template-auto"> Aplicar automaticamente em novas publicações</label>
@@ -139,6 +150,7 @@
       <!-- AGENDAMENTO -->
       <section id="painel-agendamento" role="tabpanel" aria-label="Agendamento" hidden>
         <h3>Publicar agora</h3>
+        <div id="status-publicacao"></div>
         <ul id="validacoes-publicacao" class="validacoes"></ul>
         <p id="resultado-publicacao" role="status"></p>
         <button id="preparar-publicacao" class="primario" type="button">Publicar agora no Instagram</button>
@@ -179,6 +191,9 @@
         </div>
         <p id="periodo-status" class="nota" role="status"></p>
         <div id="periodo-previa"></div>
+
+        <h3>Base usada para recomendação</h3>
+        <div id="base-analise"></div>
       </section>
 
       <!-- DESEMPENHO -->

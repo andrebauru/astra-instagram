@@ -57,6 +57,35 @@ function scorePublicacao(metrica) {
     return Math.round(score * 100);
 }
 
+/** Quais métricas a API realmente devolveu (nada é inventado). */
+function metricasDisponiveis(metricas = []) {
+    const presente = campo => metricas.some(item => {
+        const valor = item?.[campo];
+        return valor !== null && valor !== undefined && valor !== '' && Number.isFinite(Number(valor)) && Number(valor) >= 0;
+    });
+    return {
+        curtidas: presente('likes'),
+        comentarios: presente('comments'),
+        alcance: presente('reach'),
+        impressoes: presente('impressions'),
+        salvamentos: presente('saves'),
+        compartilhamentos: presente('shares'),
+        visualizacoes: presente('videoViews')
+    };
+}
+
+/** Um registro sem métricas consultadas (publicação nova) não entra na análise. */
+function temMetricas(item = {}) {
+    return ['reach', 'impressions', 'likes', 'comments', 'saves', 'shares', 'videoViews'].some(campo => Number.isFinite(Number(item[campo])));
+}
+
+/** Confiança declarada a partir do volume de amostras, não de sorteio. */
+function confianca(amostras, minimo) {
+    if (amostras >= Math.max(10, minimo * 3)) return 'Alta';
+    if (amostras >= Math.max(5, minimo * 2)) return 'Média';
+    return 'Baixa';
+}
+
 /** Média determinística de uma lista de números. */
 function media(valores) {
     if (!valores.length) return 0;
@@ -71,7 +100,7 @@ function media(valores) {
  */
 function analisarMelhoresHorarios(metricas = [], opcoes = {}) {
     const minimo = Number(opcoes.minimo) || MINIMO_AMOSTRAS;
-    const validas = (Array.isArray(metricas) ? metricas : []).filter(item => item && item.source !== 'paid' && (item.publishedAt || item.publicadoEm));
+    const validas = (Array.isArray(metricas) ? metricas : []).filter(item => item && item.source !== 'paid' && (item.publishedAt || item.publicadoEm) && (item.capturedAt || temMetricas(item)));
     const enriquecidas = validas.map(item => {
         const publicadoEm = item.publishedAt || item.publicadoEm;
         return { metrica: item, horario: horarioLocal(publicadoEm, opcoes.timezone || item.timezone || 'UTC'), score: scorePublicacao(item) };
@@ -98,16 +127,28 @@ function analisarMelhoresHorarios(metricas = [], opcoes = {}) {
     const melhorDia = [...porDia.entries()].map(([dia, scores]) => ({ dia, score: Math.round(media(scores)), amostras: scores.length })).sort((a, b) => b.score - a.score || a.dia.localeCompare(b.dia))[0] || null;
 
     const ultimaAtualizacao = validas.map(item => item.capturedAt).filter(Boolean).sort().at(-1) || null;
+    const datas = validas.map(item => item.publicadoEm || item.publishedAt).filter(Boolean).sort();
     const scoreMedio = Math.round(media(enriquecidas.map(item => item.score)));
     const suficiente = comHorario.length >= minimo;
+    const totais = {
+        curtidas: validas.reduce((soma, item) => soma + (Number(item.likes) || 0), 0),
+        comentarios: validas.reduce((soma, item) => soma + (Number(item.comments) || 0), 0),
+        alcance: validas.reduce((soma, item) => soma + (Number(item.reach) || 0), 0),
+        salvamentos: validas.reduce((soma, item) => soma + (Number(item.saves) || 0), 0),
+        compartilhamentos: validas.reduce((soma, item) => soma + (Number(item.shares) || 0), 0)
+    };
 
     return {
         suficiente,
-        mensagem: suficiente ? `Baseado no histórico disponível (${comHorario.length} publicação(ões) orgânica(s)).` : 'Dados insuficientes para recomendação forte. Sugestão baseada nos horários configurados.',
+        confianca: confianca(comHorario.length, minimo),
+        mensagem: suficiente ? `Baseado no histórico disponível (${comHorario.length} publicação(ões) orgânica(s)).` : 'Dados insuficientes para recomendação forte. Usando melhor distribuição disponível.',
         melhoresHorarios,
         melhorDia,
         melhorFaixa: melhoresHorarios[0] || null,
         postsAnalisados: validas.length,
+        periodo: datas.length ? { inicio: datas[0], fim: datas[datas.length - 1] } : null,
+        metricasDisponiveis: metricasDisponiveis(validas),
+        totais,
         scoreMedio,
         ultimaAtualizacao,
         minimoAmostras: minimo

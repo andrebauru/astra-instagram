@@ -147,7 +147,26 @@ function criarInsightsService({ instagram, caminhoCache, agora = Date.now } = {}
 
     function metricas() { return estado.metricas.slice(); }
 
-    return { listarMidias, atualizarMetricas, atualizarMetrica, analisar, metricas, _estado: () => estado };
+    /**
+     * Registra uma publicação nova no cache (sem métricas ainda) para que o
+     * módulo de desempenho possa consultá-la depois, quando os dados existirem.
+     */
+    function registrarPublicacaoMidia(midia) {
+        if (!midia?.id || !/^[A-Za-z0-9_.-]{1,200}$/.test(String(midia.id))) return null;
+        const existente = acharMetrica(midia.id);
+        if (existente) {
+            Object.assign(existente, { formato: midia.formato || existente.formato, publicadoEm: midia.publicadoEm || existente.publicadoEm, permalink: midia.permalink || existente.permalink });
+            persistir();
+            return existente;
+        }
+        const registro = normalizarMetricas({}, { id: midia.id, formato: midia.formato, publicadoEm: midia.publicadoEm, permalink: midia.permalink });
+        registro.capturedAt = null; // sem métricas consultadas ainda
+        estado.metricas.push(registro);
+        persistir();
+        return registro;
+    }
+
+    return { listarMidias, atualizarMetricas, atualizarMetrica, analisar, metricas, registrarPublicacaoMidia, _estado: () => estado };
 }
 
 module.exports = { criarInsightsService, normalizarMidia, normalizarMetricas, formatoMidia, criarCacheArquivo, PADRAO_PAGINA, MAXIMO_PAGINA };

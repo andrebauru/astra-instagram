@@ -148,6 +148,56 @@ test('diagnóstico exige token efêmero', async () => {
     });
 });
 
+test('publicação registra logs objetivos e nunca expõe token', async () => {
+    await comServidor(async ({ solicitar, definirResponder }) => {
+        definirResponder(url => {
+            if (url.includes('media_publish')) return json({ id: 'pub-log-1' });
+            if (url.includes('fields=id%2Cpermalink')) return json({ id: 'pub-log-1', permalink: 'https://www.instagram.com/p/XYZ/', timestamp: '2026-10-08T09:32:00+09:00' });
+            return json({ id: 'container-log-1' });
+        });
+        const linhas = [];
+        const original = console.log;
+        console.log = (...argumentos) => { linhas.push(argumentos.map(String).join(' ')); };
+        try {
+            const resposta = await (await solicitar('/instagram/publish', { formato: 'imagem', imageUrl: 'https://midia.dominio-publico.com/foto.jpg', caption: 'Texto', publicationId: 'pub-log' })).json();
+            assert.equal(resposta.success, true);
+            assert.equal(resposta.media_id, 'pub-log-1');
+            assert.equal(resposta.permalink, 'https://www.instagram.com/p/XYZ/');
+            assert.equal(resposta.published_at, '2026-10-08T09:32:00+09:00');
+        } finally { console.log = original; }
+        const texto = linhas.join('\n');
+        assert.match(texto, /\[HTTP\] POST \/instagram\/publish/);
+        assert.match(texto, /\[INSTAGRAM\] publish_requested type=imagem/);
+        assert.match(texto, /\[INSTAGRAM\] creating_media_container/);
+        assert.match(texto, /\[INSTAGRAM\] container_created id=/);
+        assert.match(texto, /\[INSTAGRAM\] publishing_container/);
+        assert.match(texto, /\[INSTAGRAM\] publish_success media_id=pub-log-1/);
+        assert.match(texto, /\[HTTP\] \/instagram\/publish status=200/);
+        assert.ok(!texto.includes(process.env.INSTAGRAM_ACCESS_TOKEN));
+        assert.ok(!texto.includes(process.env.OPENROUTER_API_KEY));
+    });
+});
+
+test('falha da Meta aparece no terminal e na resposta, sem segredo', async () => {
+    await comServidor(async ({ solicitar, definirResponder }) => {
+        definirResponder(() => json({ error: { code: 190, message: 'Token inválido', error_user_msg: 'Reautorize a conta.' } }, 400));
+        const linhas = [];
+        const original = console.log;
+        console.log = (...argumentos) => { linhas.push(argumentos.map(String).join(' ')); };
+        let resposta;
+        try {
+            resposta = await (await solicitar('/instagram/publish', { formato: 'imagem', imageUrl: 'https://midia.dominio-publico.com/foto.jpg', caption: 'Texto' })).json();
+        } finally { console.log = original; }
+        assert.equal(resposta.success, false);
+        assert.ok(resposta.error.includes('Reautorize a conta.'));
+        const texto = linhas.join('\n');
+        assert.match(texto, /\[HTTP\] POST \/instagram\/publish/);
+        assert.match(texto, /publish_failed/);
+        assert.match(texto, /\[HTTP\] \/instagram\/publish status=401/);
+        assert.ok(!texto.includes(process.env.INSTAGRAM_ACCESS_TOKEN));
+    });
+});
+
 test('painel é servido com os arquivos novos e sem credenciais', async () => {
     await comServidor(async ({ solicitar }) => {
         const painel = await solicitar('/painel/');

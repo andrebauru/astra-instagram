@@ -83,6 +83,37 @@ function marcarAlterado() { $('salvamento').textContent = 'Alterações ainda n�
 // ABAS / CONTEÚDOS
 // ============================================================
 
+const ORDEM_ABAS = Publicacoes.ETAPAS;
+
+function abaAtual() {
+    const tab = document.querySelector('[role=tab][data-aba][aria-selected=true]');
+    return tab?.dataset.aba || 'midia';
+}
+
+/**
+ * Função central: valida a etapa, persiste e avança para a próxima aba.
+ * Se houver erro impeditivo, mostra exatamente o campo e NÃO avança.
+ */
+async function salvarEAvancar(etapa) {
+    const etapaAtual = etapa || abaAtual();
+    const erros = Publicacoes.validarEtapa(etapaAtual, atual, {
+        midiaPublicaPronta: IR.midiasPublicasProntas(atual),
+        errosDeConteudo: R.validar(atual, Date.now(), { exigirMidia: false }).filter(i => !i.ok).map(i => i.texto)
+    });
+    await salvar(true);
+    if (erros.length) {
+        avisar(`Salvo, mas há pendências nesta etapa: ${erros.map(e => `${e.campo} — ${e.mensagem}`).join(' · ')}. Não avançando.`);
+        registrar('salvar_bloqueado', { etapa: etapaAtual, campos: erros.map(e => e.campo) });
+        renderizarRevisao();
+        return false;
+    }
+    const proxima = Publicacoes.proximaEtapa(etapaAtual);
+    if (proxima) abrirAba(proxima);
+    avisar('Salvo');
+    registrar('salvar_avancou', { etapa: etapaAtual, proxima });
+    return true;
+}
+
 function abrirAba(nome, foco = false) {
     document.querySelectorAll('[role=tab][data-aba]').forEach(tab => {
         const ativo = tab.dataset.aba === nome;
@@ -93,12 +124,13 @@ function abrirAba(nome, foco = false) {
         if (ativo && foco) tab.focus();
     });
     if (nome === 'revisao') renderizarRevisao();
+    if (nome === 'agendamento') renderizarStatusPublicacao();
     if (nome === 'desempenho') renderizarDesempenho();
     registrar('tab_change', { tab: nome });
 }
 
 function novaPublicacao() {
-    const novo = R.criarConteudo();
+    const novo = aplicarRecorrentesEm(R.criarConteudo());
     if (templatePadrao.aplicarAutomatico) novo.templateTexto = templatePadrao.texto;
     Empresa.aplicarAgendaEmpresa(novo, agendaEmpresa);
     conteudos.push(novo); atual = novo;
@@ -252,6 +284,61 @@ function sincronizarCampos() {
 function atualizarCampoConteudo() { if ($('conteudo-atual')) $('conteudo-atual').value = atual.id; }
 
 function carregarTemplateNoCampo() { if ($('template-texto')) $('template-texto').value = atual.templateTexto || templatePadrao.texto || ''; if ($('template-status')) $('template-status').textContent = templatePadrao.texto ? 'Template salvo no backend.' : 'Nenhum template salvo.'; }
+
+// ============================================================
+// DADOS RECORRENTES DA EMPRESA
+// ============================================================
+
+let recorrentes = { site: '', maps: '', linksAdicionais: '', hashtagsPadrao: '', informacoesAdicionais: '', chamadasFixas: '', templateTexto: '' };
+
+async function carregarRecorrentes() {
+    try {
+        const resposta = await cliente.solicitar('/empresa/recorrentes', undefined, { prazo: 10000 });
+        recorrentes = { ...recorrentes, ...(resposta.recorrentes || {}) };
+        $('recorrentes-status').textContent = 'Dados recorrentes carregados do backend.';
+    } catch { $('recorrentes-status').textContent = 'Dados recorrentes disponíveis apenas nesta aba (servidor offline).'; }
+    preencherCamposRecorrentes();
+}
+
+function preencherCamposRecorrentes() {
+    for (const campo of ['site', 'maps', 'links-adicionais', 'hashtags-padrao', 'informacoes-fixas', 'chamadas-fixas']) {
+        const el = $(campo);
+        if (!el) continue;
+        const chave = campo.replace(/-([a-z])/g, (_, letra) => letra.toUpperCase());
+        el.value = atual[chave] || recorrentes[chave] || '';
+    }
+    $('recorrentes-status').textContent = `Dados recorrentes salvos no backend${recorrentes.hashtagsPadrao ? ' (hashtags incluídas)' : ''}.`;
+}
+
+/** Aplica os dados recorrentes a uma publicação nova, sem hardcode no JS. */
+function aplicarRecorrentesEm(publicacao) {
+    if (!publicacao) return publicacao;
+    const fonte = ch => atual[ch] || recorrentes[ch] || '';
+    publicacao.site = fonte('site'); publicacao.maps = fonte('maps'); publicacao.linksAdicionais = fonte('linksAdicionais');
+    if (!publicacao.hashtags) publicacao.hashtags = fonte('hashtagsPadrao');
+    publicacao.informacoesAdicionais = fonte('informacoesAdicionais');
+    publicacao.chamadasFixas = fonte('chamadasFixas');
+    if (recorrentes.templateTexto && !publicacao.templateTexto) publicacao.templateTexto = recorrentes.templateTexto;
+    publicacao.incluir = { ...publicacao.incluir, site: Boolean(fonte('site')), maps: Boolean(fonte('maps')) };
+    return publicacao;
+}
+
+async function salvarRecorrentesEmpresa() {
+    const ler = id => ($(id)?.value || '').trim();
+    recorrentes = {
+        site: ler('site'), maps: ler('maps'), linksAdicionais: ler('links-adicionais'),
+        hashtagsPadrao: ler('hashtags-padrao'), informacoesAdicionais: ler('informacoes-fixas'),
+        chamadasFixas: ler('chamadas-fixas'), templateTexto: recorrentes.templateTexto || ''
+    };
+    // Reflete imediatamente na publicação atual.
+    atual.site = recorrentes.site; atual.maps = recorrentes.maps; atual.linksAdicionais = recorrentes.linksAdicionais;
+    atual.informacoesAdicionais = recorrentes.informacoesAdicionais; atual.chamadasFixas = recorrentes.chamadasFixas;
+    if (recorrentes.hashtagsPadrao && !atual.hashtags) atual.hashtags = recorrentes.hashtagsPadrao;
+    marcarAlterado();
+    try { await cliente.solicitar('/empresa/recorrentes', { recorrentes }, { prazo: 15000 }); $('recorrentes-status').textContent = 'Dados recorrentes salvos no backend.'; avisar('Dados recorrentes salvos.'); }
+    catch (erro) { $('recorrentes-status').textContent = `Salvo localmente; o servidor não confirmou: ${erro.message}`; }
+    renderizarRevisao();
+}
 
 async function salvarTemplatePadrao() {
     templatePadrao = { texto: $('template-texto').value || '', aplicarAutomatico: $('template-auto').checked === true };
@@ -436,14 +523,31 @@ function montarEntradaPublicacao() {
     return { formato: 'imagem', imageUrl: atual.imagemUrl.trim(), caption: R.compor(atual) };
 }
 
+function renderizarStatusPublicacao() {
+    const alvo = $('status-publicacao');
+    if (!alvo) return;
+    const estado = Publicacoes.statusPublicacaoVisual(atual);
+    alvo.className = estado.classe;
+    alvo.textContent = `STATUS DA PUBLICAÇÃO: ${estado.texto}`;
+    if (atual.permalink) {
+        const link = elemento('a', 'Abrir no Instagram', 'nota');
+        link.href = atual.permalink; link.target = '_blank'; link.rel = 'noopener';
+        alvo.append(document.createElement('br'), link);
+    }
+}
+
 function prepararPublicacao() {
-    if (!perfilInstagram || IR.validarInstagram(atual, R).some(i => !i.ok) || atual.estado !== 'confirmado') { avisar('Confirme o conteúdo e resolva as pendências.'); return; }
+    if (atual.statusPublicacao === 'publicado') { avisar('Esta publicação já foi enviada ao Instagram.'); return; }
+    if (atual.estado !== 'confirmado' || IR.validarInstagram(atual, R).some(i => !i.ok)) { avisar('Confirme o conteúdo na Revisão antes de publicar.'); return; }
     const entrada = montarEntradaPublicacao();
-    confirmacaoAtual = { id: atual.id, assinatura: IR.assinaturaConteudo(atual), entrada, conta: perfilInstagram.destinoId };
-    $('conta-confirmacao').textContent = `Perfil: ${perfilInstagram.username ? '@' + perfilInstagram.username : perfilInstagram.id}.`;
+    confirmacaoAtual = { id: atual.id, assinatura: IR.assinaturaConteudo(atual), entrada, conta: perfilInstagram?.destinoId || null };
+    $('conta-confirmacao').textContent = perfilInstagram
+        ? `Perfil: ${perfilInstagram.username ? '@' + perfilInstagram.username : perfilInstagram.id}.`
+        : 'Perfil não verificado nesta sessão; o backend usará a conta configurada.';
     $('midia-confirmacao').textContent = entrada.formato === 'carrossel' ? `${entrada.itens.length} itens` : (entrada.videoUrl || entrada.imageUrl);
     $('legenda-confirmacao').textContent = entrada.caption;
     $('autorizo-publicacao').checked = false; $('confirmar-publicacao').disabled = true;
+    $('confirmar-publicacao').textContent = 'Publicar agora';
     $('confirmacao-publicacao').showModal();
 }
 
@@ -451,18 +555,35 @@ async function confirmarPublicacao() {
     const confirmacao = confirmacaoAtual;
     if (!confirmacao || enviandoPublicacao || !$('autorizo-publicacao').checked) return;
     if (atual.id !== confirmacao.id || IR.assinaturaConteudo(atual) !== confirmacao.assinatura) { $('confirmacao-publicacao').close(); confirmacaoAtual = undefined; avisar('O conteúdo mudou. Revise novamente.'); return; }
-    enviandoPublicacao = true; $('confirmar-publicacao').disabled = true; $('cancelar-publicacao').disabled = true;
+    enviandoPublicacao = true;
+    atual.statusPublicacao = 'publicando';
+    $('confirmar-publicacao').disabled = true; $('confirmar-publicacao').textContent = 'Publicando…'; $('cancelar-publicacao').disabled = true;
     const tentativa = { estado: 'enviando', tentativaId: crypto.randomUUID(), iniciadoEm: new Date().toISOString() };
-    atual.publicacaoReal = tentativa; marcarAlterado();
-    if (!await salvar(true)) { delete atual.publicacaoReal; enviandoPublicacao = false; $('cancelar-publicacao').disabled = false; $('confirmacao-publicacao').close(); confirmacaoAtual = undefined; avisar('Envio cancelado.'); return; }
+    atual.publicacaoReal = tentativa; marcarAlterado(); renderizarStatusPublicacao();
+    if (!await salvar(true)) {
+        delete atual.publicacaoReal; atual.statusPublicacao = 'nao_publicada';
+        enviandoPublicacao = false; $('cancelar-publicacao').disabled = false; $('confirmar-publicacao').disabled = false; $('confirmar-publicacao').textContent = 'Publicar agora';
+        $('confirmacao-publicacao').close(); confirmacaoAtual = undefined; renderizarStatusPublicacao(); avisar('Envio cancelado.');
+        return;
+    }
     $('confirmacao-publicacao').close(); confirmacaoAtual = undefined;
     try {
         const resposta = await cliente.solicitar('/instagram/publish', { ...confirmacao.entrada, publicationId: atual.id }, { prazo: 270000, id: tentativa.tentativaId });
-        if (resposta.success !== true || !resposta.published?.id) throw new Error('O servidor não confirmou a publicação.');
+        if (resposta.success !== true || !resposta.published?.id) throw new Error(resposta.error || 'O servidor não confirmou a publicação.');
         tentativa.estado = 'publicado'; tentativa.idPublicado = resposta.published.id; tentativa.finalizadoEm = new Date().toISOString();
-        avisar('Publicação confirmada no Instagram.');
-    } catch (erro) { tentativa.estado = 'incerto'; tentativa.mensagem = erro.message; avisar(erro.message); }
-    finally { enviandoPublicacao = false; $('cancelar-publicacao').disabled = false; renderizarRevisao(); await salvar(true); }
+        Publicacoes.registrarPublicacao(atual, { mediaId: resposta.media_id || resposta.published.id, permalink: resposta.permalink, publicadoEm: resposta.published_at });
+        avisar('✓ Publicado no Instagram. Publicação concluída com sucesso. Métricas ainda não disponíveis.');
+        renderizarMetricasResumo();
+    } catch (erro) {
+        tentativa.estado = 'incerto'; tentativa.mensagem = erro.message;
+        Publicacoes.registrarPublicacao(atual, { erro: erro.message });
+        avisar(`✗ Não foi possível publicar no Instagram: ${erro.message}`);
+    }
+    finally {
+        enviandoPublicacao = false; $('cancelar-publicacao').disabled = false;
+        $('confirmar-publicacao').disabled = false; $('confirmar-publicacao').textContent = 'Publicar agora';
+        renderizarRevisao(); renderizarStatusPublicacao(); await salvar(true);
+    }
 }
 
 // ============================================================
@@ -525,7 +646,7 @@ function selecionarAnterior(item) {
 /** Cria uma nova publicação local a partir de uma anterior; nunca altera o original. */
 function usarComoBase() {
     if (!anteriorSelecionada) return;
-    const nova = R.criarConteudo();
+    const nova = aplicarRecorrentesEm(R.criarConteudo());
     nova.titulo = `Base: ${trecho(anteriorSelecionada.legenda, 40) || anteriorSelecionada.id}`;
     nova.legenda = anteriorSelecionada.legenda || '';
     nova.tipoMidia = anteriorSelecionada.formato === 'reel' ? 'reel' : anteriorSelecionada.formato === 'carrossel' ? 'carrossel' : 'imagem';
@@ -582,14 +703,45 @@ function renderizarDesempenho() {
     const resumo = $('desempenho-resumo');
     resumo.replaceChildren();
     if (!analiseAtual) { resumo.append(elemento('p', 'Atualize as métricas e analise os melhores horários.', 'nota')); return; }
+    const disponiveis = analiseAtual.metricasDisponiveis || {};
     const linhas = [
         ['Melhor dia observado', analiseAtual.melhorDia ? `${analiseAtual.melhorDia.dia} (score ${analiseAtual.melhorDia.score})` : 'não informado'],
         ['Melhor faixa horária', analiseAtual.melhorFaixa ? `${analiseAtual.melhorFaixa.hora} (score ${analiseAtual.melhorFaixa.score})` : 'não informada'],
         ['Posts analisados', String(analiseAtual.postsAnalisados)],
         ['Score médio', String(analiseAtual.scoreMedio)],
+        ['Curtidas (total)', analiseAtual.totais?.curtidas ? String(analiseAtual.totais.curtidas) : 'não informado'],
+        ['Comentários (total)', analiseAtual.totais?.comentarios ? String(analiseAtual.totais.comentarios) : 'não informado'],
+        ['Alcance', disponiveis.alcance ? String(analiseAtual.totais.alcance || '') : 'não disponível nesta conta'],
+        ['Confiança', analiseAtual.confianca || 'Baixa'],
         ['Última atualização', analiseAtual.ultimaAtualizacao ? new Date(analiseAtual.ultimaAtualizacao).toLocaleString('pt-BR') : 'não informada']
     ];
     for (const [rotulo, valor] of linhas) resumo.append(elemento('div', `${rotulo}: ${valor}`, 'agenda-item'));
+}
+
+/** Explica de onde saiu a recomendação automática de horários. */
+function renderizarBaseAnalise() {
+    const container = $('base-analise');
+    if (!container) return;
+    container.replaceChildren();
+    if (!analiseAtual) { container.append(elemento('p', 'Nenhuma análise executada ainda. Use "Analisar melhores horários" na aba Desempenho.', 'nota')); return; }
+    const d = analiseAtual.metricasDisponiveis || {};
+    const lista = [['Curtidas', d.curtidas], ['Comentários', d.comentarios], ['Alcance', d.alcance], ['Impressões', d.impressoes], ['Salvamentos', d.salvamentos], ['Compartilhamentos', d.compartilhamentos]];
+    for (const [nome, ok] of lista) container.append(elemento('div', `${ok ? '✓' : '○'} ${ok ? nome : nome + ' indisponível'}`, ok ? 'ok' : 'nota'));
+    const periodos = analiseAtual.periodo ? `${new Date(analiseAtual.periodo.inicio).toLocaleDateString('pt-BR')} a ${new Date(analiseAtual.periodo.fim).toLocaleDateString('pt-BR')}` : 'não informado';
+    container.append(elemento('div', `Posts analisados: ${analiseAtual.postsAnalisados}`, 'agenda-item'));
+    container.append(elemento('div', `Período analisado: ${periodos}`, 'agenda-item'));
+    container.append(elemento('div', `Última atualização: ${analiseAtual.ultimaAtualizacao ? new Date(analiseAtual.ultimaAtualizacao).toLocaleString('pt-BR') : 'não informada'}`, 'agenda-item'));
+    container.append(elemento('div', `Confiança: ${analiseAtual.confianca || 'Baixa'}`, 'agenda-item'));
+    container.append(elemento('p', analiseAtual.mensagem, analiseAtual.suficiente ? 'nota' : 'pendente'));
+    const ranking = elemento('ol');
+    for (const item of analiseAtual.melhoresHorarios || []) ranking.append(elemento('li', `${item.hora} — score ${item.score} (${item.amostras} amostra(s))`));
+    container.append(elemento('p', 'Melhores horários encontrados:', 'nota'), ranking);
+}
+
+/** Nota de disponibilidade de métricas após publicar. */
+function renderizarMetricasResumo() {
+    const alvo = $('metricas-resumo');
+    if (alvo) alvo.textContent = 'Publicação concluída. Métricas ainda não disponíveis. Use "Atualizar métricas" mais tarde.';
 }
 
 async function reotimizar() {
@@ -730,7 +882,15 @@ function conectarCampos() {
     $('atualizar-modelos').onclick = () => carregarModelos(true);
     $('modelo-astra').onchange = () => { atual.modeloAstra = $('modelo-astra').value; marcarAlterado(); mostrarModeloSelecionado(); };
     $('revisar').onclick = marcarRevisaoHumana;
-    $('aprovar').onclick = () => { if (!IR.midiasPublicasProntas(atual) || R.validar(atual, Date.now(), { exigirMidia: false }).some(i => !i.ok)) { renderizarRevisao(); avisar('Ainda há pendências.'); return; } atual.estado = 'confirmado'; marcarAlterado(); renderizarRevisao(); salvar(true); avisar('Conteúdo confirmado.'); };
+    $('aprovar').onclick = async () => {
+        if (!IR.midiasPublicasProntas(atual) || R.validar(atual, Date.now(), { exigirMidia: false }).some(i => !i.ok)) { renderizarRevisao(); avisar('Ainda há pendências.'); return; }
+        atual.estado = 'confirmado'; marcarAlterado(); renderizarRevisao();
+        const salvo = await salvar(true);
+        avisar('Conteúdo confirmado');
+        if (salvo) abrirAba('agendamento');
+    };
+    $('salvar').onclick = () => salvarEAvancar();
+    $('salvar-recorrentes').onclick = salvarRecorrentesEmpresa;
     $('preparar-publicacao').onclick = prepararPublicacao;
     $('cancelar-publicacao').onclick = () => { confirmacaoAtual = undefined; $('confirmacao-publicacao').close(); };
     $('autorizo-publicacao').onchange = () => { $('confirmar-publicacao').disabled = !$('autorizo-publicacao').checked || enviandoPublicacao; };
@@ -782,11 +942,11 @@ async function iniciar() {
     } catch { avisar('Armazenamento local indisponível.'); }
     if (!atual.templateTexto && templatePadrao.texto) atual.templateTexto = templatePadrao.texto;
     IR.sincronizarUrlsPublicas(atual);
-    sincronizarCampos(); carregarTemplateNoCampo(); atualizarSeletorConteudos();
-    renderizarMidias(); renderizarRevisao(); renderizarPeriodoPrevia(); renderizarAnalise(); renderizarDesempenho();
+    sincronizarCampos(); carregarTemplateNoCampo(); atualizarSeletorConteudos(); preencherCamposRecorrentes();
+    renderizarMidias(); renderizarRevisao(); renderizarPeriodoPrevia(); renderizarAnalise(); renderizarDesempenho(); renderizarBaseAnalise(); renderizarStatusPublicacao();
     restaurarDatasPeriodo();
     window.iniciarDiagnostico?.((rota, corpo, opcoes) => cliente.solicitar(rota, corpo, opcoes));
-    verificarServidor(); carregarModelos(); carregarAnteriores(true);
+    verificarServidor(); carregarModelos(); carregarAnteriores(true); carregarRecorrentes();
     globalThis.AstraContexto = {
         avisar,
         cliente: (rota, corpo, opcoes) => cliente.solicitar(rota, corpo, opcoes),

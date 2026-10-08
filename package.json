@@ -4,7 +4,7 @@
   "description": "Astra Instagram: estúdio local de mídia, IA e publicação/agendamento no Instagram.",
   "main": "server.js",
   "scripts": {
-    "test": "node --test testes/api.test.js testes/frontend-smoke.test.js testes/instagram-service.test.js testes/media-service.test.js testes/scheduler-service.test.js testes/upload-url.test.js testes/restauracao.test.js modelos-astra.test.js painel-meta-prototipo/regras.test.js",
+    "test": "node --test testes/api.test.js testes/fluxo.test.js testes/frontend-smoke.test.js testes/instagram-service.test.js testes/media-service.test.js testes/scheduler-service.test.js testes/upload-url.test.js testes/restauracao.test.js modelos-astra.test.js painel-meta-prototipo/regras.test.js",
     "start": "node --env-file=.env server.js",
     "painel": "node painel-meta-prototipo/servidor.js",
     "test:ui": "node testes/servidor-ui-simulado.js"
