@@ -75,6 +75,7 @@ test('site, Google Maps, hashtags padrão e template persistem no backend', () =
     store.salvarRecorrentes({
         site: 'https://quimbanda.jp',
         maps: 'https://maps.google.com/?q=quimbanda.jp',
+        linksAdicionais: 'https://quimbanda.jp/agenda\nhttps://quimbanda.jp/contato',
         hashtagsPadrao: '#umbandajapao #quimbandajapao #exunojapao',
         informacoesAdicionais: 'Entrada gratuita.',
         chamadasFixas: 'Participe!',
@@ -83,6 +84,7 @@ test('site, Google Maps, hashtags padrão e template persistem no backend', () =
     const relido = criarStoreEmpresa(caminho).lerRecorrentes();
     assert.equal(relido.site, 'https://quimbanda.jp');
     assert.equal(relido.maps, 'https://maps.google.com/?q=quimbanda.jp');
+    assert.equal(relido.linksAdicionais, 'https://quimbanda.jp/agenda\nhttps://quimbanda.jp/contato');
     assert.equal(relido.hashtagsPadrao, '#umbandajapao #quimbandajapao #exunojapao');
     assert.equal(relido.chamadasFixas, 'Participe!');
 
@@ -100,6 +102,9 @@ test('site, Google Maps, hashtags padrão e template persistem no backend', () =
     assert.equal((final.match(/080-5774-4281/g) || []).length, 1);
     Publicacoes.migrarPublicacao(p);
     assert.equal(p.hashtags, relido.hashtagsPadrao);
+    assert.deepEqual(store.salvarTemplatePadrao({ texto: 'Dois sites e hashtags exatas.', aplicarAutomatico: true }), { texto: 'Dois sites e hashtags exatas.', aplicarAutomatico: true });
+    const aposReinicio = criarStoreEmpresa(caminho).lerTemplatePadrao();
+    assert.deepEqual(aposReinicio, { texto: 'Dois sites e hashtags exatas.', aplicarAutomatico: true });
     try { fs.rmSync(caminho, { force: true }); } catch { /* melhor esforço */ }
 });
 

@@ -11,7 +11,9 @@
 
 const {
     LIMITE_IMAGEM,
+    LIMITE_VIDEO,
     decodificarImagem,
+    decodificarMidia,
     criarServicoMidiaPublica,
     normalizarUrlPublica,
     normalizarUrlConfigurada
@@ -27,6 +29,7 @@ function criarMediaService({ midia, fetchImpl, resolverIPs } = {}) {
         basePublicaUrl: configuracao.basePublicaUrl,
         uploadKey: configuracao.uploadKey,
         prazoVerificacao: configuracao.verificacaoTimeoutMs,
+        prazoUpload: configuracao.uploadTimeoutMs,
         fetchImpl: (...args) => transporte()(...args),
         resolverIPs
     });
@@ -41,12 +44,12 @@ function criarMediaService({ midia, fetchImpl, resolverIPs } = {}) {
         return servico.publicar({ dados, mime, nome });
     }
 
-    /** Confirma que uma URL HTTPS pública responde com uma imagem aceita. */
+    /** Confirma que uma URL HTTPS pública responde com uma mídia aceita. */
     async function verificar(url) {
         return verificarUrlPublica(url, {
             transporte: (...args) => transporte()(...args),
             resolverIPs,
-            tiposAceitos: ['image/jpeg', 'image/png', 'image/webp']
+            tiposAceitos: ['image/jpeg', 'image/png', 'image/webp', 'video/mp4']
         });
     }
 
@@ -56,7 +59,9 @@ function criarMediaService({ midia, fetchImpl, resolverIPs } = {}) {
         verificar,
         // Utilidades reutilizadas por rotas e testes.
         limiteBytes: LIMITE_IMAGEM,
+        limiteVideoBytes: LIMITE_VIDEO,
         decodificarImagem,
+        decodificarMidia,
         normalizarUrlPublica,
         normalizarUrlConfigurada,
         hostPublico

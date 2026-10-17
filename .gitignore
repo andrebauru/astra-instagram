@@ -19,3 +19,8 @@ _backups/
 .DS_Store
 Thumbs.db
 *.tmp
+
+# Artefatos locais de deploy/upload (podem conter credenciais ou mídia do usuário)
+upload.php
+.user.ini
+media/

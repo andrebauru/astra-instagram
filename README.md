@@ -6,9 +6,10 @@ Node.js, sem dependências de execução.
 
 ## Escopo
 
-O projeto cobre apenas: Instagram, IA, upload de mídia, geração de conteúdo,
-revisão, publicação imediata e agendamento. Facebook, Meta Ads e todo o
-impulsionamento foram removidos. Veja [ARQUITETURA-ASTRA-INSTAGRAM.md](ARQUITETURA-ASTRA-INSTAGRAM.md).
+O projeto cobre Instagram, IA, upload de mídia, geração de conteúdo, revisão,
+publicação imediata e agendamento. A publicação imediata também permite uma
+Página do Facebook como destino opcional. Meta Ads e impulsionamento não fazem
+parte do fluxo. A agenda de período também permite Facebook Page como destino independente.
 
 ## Requisitos e execução
 
@@ -55,7 +56,7 @@ Variáveis: `MEDIA_UPLOAD_URL`, `MEDIA_UPLOAD_KEY`, `MEDIA_PUBLIC_BASE_URL`,
 ## Agendamentos
 
 A página **Agendamentos** lista, cria, edita, pausa e cancela. A execução usa o
-mesmo `InstagramService.publish()` da publicação imediata. Os planos são
+mesmo serviço de publicação imediata de cada destino (Instagram ou Facebook). Os planos são
 persistidos em `dados/agendamentos.json` e sobrevivem a reinícios; resultados
 incertos são reconciliados antes de qualquer reenvio, e a política de atraso
 evita publicar em massa o que venceu com o servidor desligado.
@@ -69,8 +70,40 @@ cookie, mídia em base64 ou corpo completo é registrado.
 
 ## Configuração
 
+Em **Configurações → Integrações Meta e OpenRouter**, configure o aplicativo e use
+o assistente **Conectar com Facebook**. Credenciais manuais continuam na área avançada.
+Consulte [Conexão Meta](docs/CONEXAO-META.md) para requisitos e limitações.
+Cada campo possui um link oficial de apoio, aberto em nova aba sem enviar os valores.
+IDs são visíveis; tokens e a chave OpenRouter ficam mascarados e nunca são retornados
+pelo backend. Deixar um segredo vazio mantém o valor existente. O App ID é cadastral;
+não substitui o token nem concede permissões na Meta.
+
+O painel salva sobreposições em `dados/integracoes.json` (ou no caminho indicado por
+`ASTRA_INTEGRACOES_ARQUIVO`), preservando o `.env`. Esse arquivo privado usa
+AES-256-GCM, com chave protegida pelo usuário Windows via DPAPI:
+não o compartilhe, publique ou inclua em backups públicos. A pasta `dados/` é ignorada
+pelo Git e não é servida por HTTP. Os valores salvos prevalecem sobre o `.env` nos
+próximos inícios; clientes são atualizados imediatamente ao salvar.
+
+Para publicação imediata, selecione Instagram, Facebook ou ambos; teste os destinos
+e confirme o envio no diálogo. Facebook exige `FACEBOOK_PAGE_ID` e um token próprio
+de Página (`FACEBOOK_PAGE_ACCESS_TOKEN`). Suporta foto, conjunto de 2 a 10 fotos e
+vídeo da Página (não criação de Facebook Reel). Falhas sem confirmação não são
+reenviadas automaticamente; confira a Página. O assistente solicita consentimento
+na Meta; revogação é uma ação separada com confirmação. A configuração por si só
+não comprova que o token possui autorização de publicação.
+
+Stories usam a conta de Instagram configurada para consultar o tipo Business e
+preservam o tipo vídeo no envio direto. Story adicional de carrossel é recusado
+antes de publicar o Feed. A confirmação real depende da conta e da resposta Meta.
+
+Rotas: `GET/POST /config/integracoes`, `GET /facebook/me`. A rota existente
+`POST /instagram/publish` aceita `publicarInstagram` (padrão `true`) e
+`publicarFacebook` (padrão `false`), com resultados separados por destino.
+
 ```text
 INSTAGRAM_ACCESS_TOKEN, INSTAGRAM_ACCOUNT_ID
+META_APP_ID, FACEBOOK_PAGE_ID, FACEBOOK_PAGE_ACCESS_TOKEN
 OPENROUTER_API_KEY, OPENROUTER_MODEL (ou ASTRA_MODEL)
 PORT, META_GRAPH_BASE_URL, META_GRAPH_VERSION
 MEDIA_UPLOAD_URL, MEDIA_UPLOAD_KEY, MEDIA_PUBLIC_BASE_URL, MEDIA_PUBLIC_VERIFY_TIMEOUT_MS

@@ -12,6 +12,8 @@
 <script defer src="diagnostico.js"></script>
 <script defer src="integracao-regras.js"></script>
 <script defer src="fluxo-editorial.js"></script>
+<script defer src="logs.js"></script>
+<script defer src="meta-conexao.js"></script>
 <script defer src="painel.js"></script>
 <script defer src="agendamentos.js"></script>
 </head>
@@ -22,6 +24,7 @@
     <button type="button" data-view="editor" aria-pressed="true">Editor</button>
     <button type="button" data-view="agendamentos" aria-pressed="false">Agendamentos</button>
     <button type="button" data-view="configuracoes" aria-pressed="false">Configurações</button>
+    <button type="button" data-view="logs" aria-pressed="false">Logs</button>
   </nav>
   <span class="selo">● Bridge local</span>
 </header>
@@ -72,11 +75,20 @@
           <label id="campo-video-url" hidden>URL pública do vídeo<input id="videoUrl" type="url" placeholder="https://seu-dominio.com/video.mp4"></label>
         </div>
         <p id="status-url-publica" class="nota" role="status"></p>
+        <label class="check"><input id="publicar-instagram" type="checkbox" checked> Publicar no Instagram (opcional)</label>
+        <label class="check"><input id="publicar-facebook" type="checkbox"> Publicar na Página do Facebook (opcional)</label>
+        <p class="nota">No Facebook: foto, conjunto de fotos ou vídeo da Página. A agenda possui seleção própria de destinos.</p>
+        <label class="check"><input id="publicar-story" type="checkbox" disabled> Story do Instagram (independente do Feed)</label>
+        <p id="story-explicacao" class="nota">Teste uma conta Business para habilitar Stories.</p>
+        <label class="check"><input id="publicar-facebook-story" type="checkbox" disabled> Story do Facebook (independente do Feed)</label>
+        <p id="facebook-story-explicacao" class="nota">Conecte e verifique a Página Facebook.</p>
         <label>Ação para este envio múltiplo
           <select id="acao-upload"><option value="biblioteca">Adicionar à publicação atual</option><option value="carrossel">Criar uma publicação em carrossel</option><option value="distribuir">Criar várias publicações para distribuir na agenda</option></select>
         </label>
-        <label class="upload"><span class="upload-icone">＋</span><strong>Selecionar imagens e vídeos</strong><span>JPEG, PNG, WebP ou MP4 · preview local · envio manual por arquivo</span><input id="arquivos" type="file" accept="image/jpeg,image/png,image/webp,video/mp4" multiple></label>
+        <label class="upload"><span class="upload-icone">＋</span><strong>Selecionar imagens e vídeos</strong><span>JPEG, PNG, WebP ou MP4 · até 256 MB por arquivo · preview local · envio manual por arquivo</span><input id="arquivos" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,.mp4" multiple></label>
         <div id="progresso-upload" class="lista-status" aria-live="polite"></div>
+        <h3>URLs públicas das mídias</h3>
+        <ul id="urls-publicas-midias"></ul>
         <div id="galeria" class="galeria"></div>
       </section>
 
@@ -88,6 +100,7 @@
         <label>Informações adicionais (opcional)<textarea id="contexto" rows="3"></textarea></label>
         <h3>Análise de mídia</h3>
         <button id="analisar-midia" type="button">Analisar mídia com IA</button>
+        <p class="nota">MP4: análise visual de 6 quadros distribuídos pelo vídeo, sem áudio. Use um modelo com visão.</p>
         <label>Fatos identificados pela IA<textarea id="fatosIa" rows="3"></textarea></label>
         <label>Texto encontrado na mídia<textarea id="textoMidia" rows="2"></textarea></label>
         <div class="duas-colunas">
@@ -107,10 +120,15 @@
         <div class="acoes"><button id="salvar-recorrentes" type="button">Salvar dados recorrentes</button></div>
         <p id="recorrentes-status" class="nota">Carregando dados recorrentes…</p>
         <h3>Template padrão</h3>
+        <div class="duas-colunas">
+          <label>Nome do template<input id="template-nome" placeholder="Ex.: Eventos de domingo"></label>
+          <label>Carregar template<select id="template-seletor"><option value="">Selecione…</option></select></label>
+        </div>
         <label>Texto fixo recorrente (hashtags, links, chamadas)<textarea id="template-texto" rows="4" placeholder="Informações que uso em praticamente todas as postagens."></textarea></label>
         <label class="check"><input type="checkbox" id="template-auto"> Aplicar automaticamente em novas publicações</label>
         <div class="acoes">
-          <button id="template-salvar" type="button">Salvar template</button>
+          <button id="template-salvar" type="button">Salvar como novo</button>
+          <button id="template-atualizar" type="button">Atualizar selecionado</button>
           <button id="template-aplicar" type="button">Aplicar à publicação atual</button>
         </div>
         <p id="template-status" class="nota">Nenhum template salvo.</p>
@@ -192,12 +210,17 @@
         <div class="duas-colunas">
           <label>Nível de variação<select id="periodo-nivel"><option value="Baixa" selected>Baixa</option><option value="Média">Média</option><option value="Alta">Alta</option></select></label>
           <label class="check"><input type="checkbox" id="periodo-reutilizar"> Permitir reutilização de mídia</label>
+          <label class="check"><input type="checkbox" id="periodo-instagram" checked> Agendar no Instagram</label>
+          <label class="check"><input type="checkbox" id="periodo-facebook"> Agendar na Página do Facebook selecionada</label>
+          <label class="check"><input type="checkbox" id="periodo-story" disabled> Publicar também no Story</label>
         </div>
+        <p id="periodo-story-explicacao" class="nota">Stories exigem uma conta Instagram Business verificada.</p>
         <div class="acoes">
           <button id="periodo-gerar" type="button">Gerar agendamento</button>
           <button id="periodo-confirmar" class="primario" type="button" disabled>Confirmar plano</button>
         </div>
         <p id="periodo-status" class="nota" role="status"></p>
+        <p class="nota">Após a confirmação, o backend executa o plano mesmo com o navegador fechado. O processo Node precisa permanecer ativo.</p>
         <div id="periodo-previa"></div>
 
         <h3>Base usada para recomendação</h3>
@@ -220,7 +243,7 @@
         <div id="desempenho-resumo"></div>
       </section>
 
-      <footer class="rodape-etapa"><div><strong id="etapa-salvar">Etapa Mídia</strong><span id="salvamento">Alterações ainda não salvas</span></div><button id="salvar" class="primario" type="button">Salvar e continuar</button></footer>
+      <footer class="rodape-etapa"><div><strong id="etapa-salvar">Etapa Mídia</strong><span id="salvamento">Alterações ainda não salvas</span><span id="conexoes-rodape" role="status">Verificando conexões…</span></div><button id="salvar" class="primario" type="button">Salvar e continuar</button></footer>
     </article>
   </div>
 </section>
@@ -241,6 +264,67 @@
 <!-- ============================================================= -->
 <section id="view-configuracoes" class="view" hidden>
   <div class="cabecalho"><div><p class="eyebrow">SUPORTE</p><h1>Configurações</h1></div></div>
+  <article class="cartao" aria-labelledby="meta-titulo">
+    <h2 id="meta-titulo">Conexão guiada com Facebook</h2>
+    <p class="nota">1. Configure o aplicativo uma vez abaixo. 2. Autorize na Meta. 3. Escolha sua Página. A conexão Instagram existente será preservada.</p>
+    <div class="acoes">
+      <button id="meta-conectar" type="button" class="primario">Conectar com Facebook</button>
+      <button id="meta-verificar" type="button">Verificar conexão e permissões</button>
+      <button id="meta-desconectar" type="button">Desconectar Facebook deste Astra</button>
+    </div>
+    <p id="meta-estado" role="status" class="nota">Consultando conexão…</p>
+    <p id="meta-configuracao-pendente" role="status" class="pendente"></p>
+    <label>Página autorizada<select id="meta-paginas"><option value="">Conecte para listar páginas</option></select></label>
+    <button id="meta-selecionar" type="button" disabled>Usar esta Página</button>
+    <p id="meta-instagram" class="nota"></p>
+    <details><summary>Diagnóstico seguro e revogação</summary>
+      <pre id="meta-diagnostico"></pre>
+      <p class="nota">Lista vazia não comprova a causa. Confira no negócio as atribuições e os ativos selecionados no consentimento. Modo do app e App Review exigem verificação no painel Meta.</p>
+      <button id="meta-revogar" type="button">Revogar autorização Facebook deste aplicativo</button>
+    </details>
+  </article>
+  <article class="cartao">
+    <h2>Integrações Meta e OpenRouter</h2>
+    <p class="nota">Configuração inicial do aplicativo e OpenRouter. Segredos ficam criptografados no backend, nunca são devolvidos ao navegador. Vazio mantém o valor atual. O .env não será alterado.</p>
+    <form id="form-integracoes">
+      <label>Meta App ID<input id="config-META_APP_ID" inputmode="numeric" autocomplete="off"></label>
+      <p class="nota"><a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">Abrir Meus Apps da Meta para consultar o App ID ↗</a></p>
+      <p id="erro-META_APP_ID" class="pendente" role="status"></p>
+      <label>App Secret da Meta<input id="config-META_APP_SECRET" type="password" autocomplete="new-password"></label>
+      <p class="nota"><a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">App → Configurações básicas ↗</a></p>
+      <p id="erro-META_APP_SECRET" class="pendente" role="status"></p>
+      <label>Login Configuration ID<input id="config-META_LOGIN_CONFIG_ID" inputmode="numeric" autocomplete="off"></label>
+      <p class="nota"><a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">Facebook Login for Business → Configuração com token de usuário ↗</a></p>
+      <p id="erro-META_LOGIN_CONFIG_ID" class="pendente" role="status"></p>
+      <label>Versão Graph API do Facebook<input id="config-FACEBOOK_GRAPH_VERSION" placeholder="Versão habilitada no app, no formato vN.N"></label>
+      <p class="nota"><a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer">Consultar versão do Facebook ↗</a></p>
+      <p id="erro-FACEBOOK_GRAPH_VERSION" class="pendente" role="status"></p>
+      <label>URI de retorno OAuth<input id="config-META_REDIRECT_URI" placeholder="http://localhost:8080/meta/oauth/retorno"></label>
+      <p class="nota"><a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">Cadastrar a mesma URI no login do aplicativo ↗</a></p>
+      <p id="erro-META_REDIRECT_URI" class="pendente" role="status"></p>
+      <p class="nota">Use exatamente o endereço e a porta onde você abre o Astra. Callback local depende das regras e do modo do aplicativo Meta. Esta instalação não recebe callbacks no servidor de mídia.</p>
+      <details><summary>Avançado: integração Instagram existente e configuração manual legada</summary>
+      <label>Instagram Account ID<input id="config-INSTAGRAM_ACCOUNT_ID" inputmode="numeric" autocomplete="off"></label>
+      <p class="nota"><a href="https://business.facebook.com/settings/" target="_blank" rel="noopener noreferrer">Abrir configurações do negócio · Contas do Instagram ↗</a></p>
+      <label>Token do Instagram<input id="config-INSTAGRAM_ACCESS_TOKEN" type="password" autocomplete="new-password"></label>
+      <p class="nota"><a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">Abrir o app Meta · Configuração da API do Instagram ↗</a></p>
+      <label>Facebook Page ID<input id="config-FACEBOOK_PAGE_ID" inputmode="numeric" autocomplete="off"></label>
+      <p class="nota"><a href="https://business.facebook.com/settings/" target="_blank" rel="noopener noreferrer">Abrir configurações do negócio · Contas → Páginas ↗</a></p>
+      <label>Token de acesso da Página do Facebook<input id="config-FACEBOOK_PAGE_ACCESS_TOKEN" type="password" autocomplete="new-password"></label>
+      <p class="nota"><a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer">Abrir Graph API Explorer para obter o token da Página ↗</a></p>
+      <p class="nota">No fluxo normal não copie tokens: use Conectar com Facebook. Alterar credenciais manuais não substitui uma autorização OAuth pendente ou revogada.</p>
+      </details>
+      <label>Chave da API OpenRouter<input id="config-OPENROUTER_API_KEY" type="password" autocomplete="new-password"></label>
+      <p class="nota"><a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer">Abrir minhas chaves de API no OpenRouter ↗</a></p>
+      <label>Versão Graph API (opcional)<input id="config-META_GRAPH_VERSION" placeholder="Versão já usada pela integração"></label>
+      <p class="nota"><a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer">Consultar a versão da Graph API no Explorer ↗</a></p>
+      <p class="nota">Os links abrem em nova aba e podem exigir login. Escolha seu app ou negócio; nenhum ID ou segredo é enviado pelo link.</p>
+      <button class="primario" id="salvar-integracoes" type="submit">Salvar integrações</button>
+    </form>
+    <button id="testar-facebook" type="button">Testar Página do Facebook</button>
+    <p id="status-facebook" class="nota" role="status">Página ainda não verificada nesta sessão.</p>
+    <p id="status-integracoes" class="nota" role="status"></p>
+  </article>
   <article class="cartao">
     <h2>Diagnóstico</h2>
     <p id="diagnostico-estado" class="nota" role="status">Consultando o estado do diagnóstico…</p>
@@ -262,6 +346,36 @@
     </div>
     <p id="status-template-requisitos" class="nota">Nenhum template fixo salvo.</p>
   </article>
+</section>
+
+<!-- ============================================================= -->
+<!-- LOGS (atividade e erros persistentes)                        -->
+<!-- ============================================================= -->
+<section id="view-logs" class="view" hidden>
+  <div class="cabecalho">
+    <div><p class="eyebrow">DIAGNÓSTICO PERMANENTE</p><h1>Logs</h1><p class="muted">Atividades e erros persistidos no backend. Segredos são mascarados.</p></div>
+    <div class="acoes"><button id="logs-atualizar" type="button">Atualizar</button></div>
+  </div>
+  <p id="logs-resumo" class="nota" role="status">Carregando…</p>
+  <div class="duas-colunas">
+    <label>Nível<select id="logs-nivel"><option value="">Todos</option><option value="DEBUG">DEBUG</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option></select></label>
+    <label>Módulo<select id="logs-modulo"><option value="">Todos</option></select></label>
+    <label>Plataforma<select id="logs-plataforma"><option value="">Todas</option></select></label>
+    <label>Status<select id="logs-status"><option value="">Todos</option></select></label>
+    <label>Operação (ID)<input id="logs-operation" placeholder="ID da operação"></label>
+    <label>Busca<input id="logs-busca" placeholder="Texto da ação, mensagem ou código"></label>
+    <label>Desde<input id="logs-desde" type="date"></label>
+    <label>Até<input id="logs-ate" type="date"></label>
+  </div>
+  <div class="acoes"><button id="logs-limpar" type="button">Limpar filtros</button></div>
+  <div id="logs-lista" class="calendario-semanal"></div>
+  <div class="acoes">
+    <button id="logs-anterior" type="button">Anterior</button>
+    <span id="logs-pagina" class="nota"></span>
+    <button id="logs-proxima" type="button">Próxima</button>
+  </div>
+  <h3>Detalhes</h3>
+  <pre id="logs-detalhe" class="nota">Selecione um evento para ver os detalhes.</pre>
 </section>
 </main>
 

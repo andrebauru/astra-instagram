@@ -112,7 +112,7 @@ function validar(p, agora = Date.now(), opcoes = {}) {
     const adicionar = (ok, texto) => itens.push({ ok, texto });
     if (opcoes.exigirMidia !== false) adicionar(Array.isArray(p.imagens) && p.imagens.length > 0, 'Ao menos uma mídia selecionada');
     adicionar(typeof p.legenda === 'string' && p.legenda.trim().length > 0, 'Legenda preenchida');
-    adicionar(['imagem', 'reel', 'carrossel'].includes(p.tipoMidia), 'Tipo de publicação definido');
+    adicionar(['imagem', 'reel', 'carrossel'].includes(p.tipoMidia), 'Tipo de mídia definido');
     const tags = linhas(p.hashtags).join(' ').split(/\s+/).filter(Boolean);
     adicionar(tags.every(tag => /^#[\p{L}\p{N}_]+$/u.test(tag)), 'Formato das hashtags obrigatórias');
     for (const chave of ['maps', 'site', 'site1', 'site2']) {
@@ -138,6 +138,7 @@ function criarConteudo() {
         titulo: '',
         criadaEm: new Date().toISOString(),
         tipoMidia: 'imagem',
+        publicarStory: false,
         imagens: [],
         imagemUrl: '', videoUrl: '',
         tema: '', fatos: '', fatosIa: '', textoMidia: '', contexto: '', objetivo: '',

@@ -17,7 +17,7 @@ const Regras = require('../painel-meta-prototipo/regras');
 const ESTADOS_PLANO = ['rascunho', 'aprovado', 'parcialmente aprovado', 'pausado', 'concluido', 'cancelado'];
 const ESTADOS_ITEM = ['rascunho', 'aprovado', 'pausado', 'aguardando', 'em andamento', 'confirmada', 'incerto', 'falhou', 'reagendado', 'cancelado', 'bloqueado'];
 const CODIGOS_INCERTOS = ['META_CONEXAO', 'TEMPO_ESGOTADO', 'PUBLICACAO_INDETERMINADA', 'META_RESPOSTA_INVALIDA'];
-const DESTINOS = ['Instagram'];
+const DESTINOS = ['Instagram', 'Instagram Feed', 'Instagram Story', 'Facebook Page'];
 
 function agoraISO(agora) { return new Date(agora).toISOString(); }
 
@@ -34,10 +34,10 @@ function destinosDoItem(item) {
 
 /** Recalcula a assinatura de aprovação exatamente como o painel a definiu. */
 function assinaturaDoItem(item) {
-    return PlanejamentoSemanal.assinar({
+    return PlanejamentoSemanal.assinar(PlanejamentoSemanal.dadosAprovacao({
         mediaId: item.mediaId, data: item.data, hora: item.hora,
-        timezone: item.timezone, destinos: destinosDoItem(item), legenda: item.legenda
-    });
+        timezone: item.timezone, destinos: destinosDoItem(item), legenda: item.legenda, facebookPageId: item.facebookPageId
+    }));
 }
 
 function aprovacaoValida(item) {
@@ -52,14 +52,20 @@ function criarArmazenamentoArquivo(caminho) {
         carregar() {
             try {
                 const dados = JSON.parse(fs.readFileSync(caminho, 'utf8'));
-                return dados && typeof dados === 'object' ? dados : { planos: [] };
-            } catch { return { planos: [] }; }
+                if (!dados || typeof dados !== 'object' || Array.isArray(dados) || !Array.isArray(dados.planos)) throw new Error('Formato inválido');
+                return dados;
+            } catch (erro) {
+                if (erro.code === 'ENOENT') return { planos: [] };
+                throw new Error('Agenda indisponível ou corrompida. Preserve o arquivo antes de tentar recuperar.');
+            }
         },
         salvar(estado) {
             try {
                 fs.mkdirSync(path.dirname(caminho), { recursive: true });
-                const temporario = `${caminho}.tmp`;
-                fs.writeFileSync(temporario, JSON.stringify(estado), { encoding: 'utf8', mode: 0o600 });
+                const temporario = `${caminho}.${process.pid}.tmp`;
+                const fd = fs.openSync(temporario, 'w', 0o600);
+                try { fs.writeFileSync(fd, JSON.stringify(estado), 'utf8'); fs.fsyncSync(fd); }
+                finally { fs.closeSync(fd); }
                 fs.renameSync(temporario, caminho);
                 return true;
             } catch { return false; }
@@ -84,7 +90,20 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
     let estado = armazenamento.carregar();
     if (!Array.isArray(estado.planos)) estado.planos = [];
 
-    function persistir() { estado.atualizadoEm = agoraISO(agora()); return armazenamento.salvar(estado); }
+    function persistir() {
+        estado.atualizadoEm = agoraISO(agora());
+        try {
+            if (armazenamento.salvar(estado) === false) throw new Error();
+        } catch {
+            throw Object.assign(new Error('Não foi possível salvar a agenda. Publicações interrompidas; verifique o armazenamento.'), { codigo: 'AGENDA_PERSISTENCIA' });
+        }
+        return true;
+    }
+
+    /** Resultado sem confirmação nunca autoriza uma nova tentativa externa. */
+    function temResultadoPendente(item) {
+        return Object.values(item.resultados || {}).some(r => ['incerto', 'em andamento'].includes(r.estado));
+    }
 
     function sincronizarPlanos(planos = []) {
         const mapa = new Map(estado.planos.map(plano => [plano.id, plano]));
@@ -129,7 +148,7 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
         const destinos = destinosDoItem(item);
         const resultados = destinos.map(destino => item.resultados?.[destino]?.estado || 'aguardando');
         if (resultados.every(estado => estado === 'confirmada')) item.status = 'confirmada';
-        else if (resultados.some(estado => estado === 'incerto')) item.status = 'incerto';
+        else if (resultados.some(estado => ['incerto', 'em andamento'].includes(estado))) item.status = 'incerto';
         else if (resultados.some(estado => estado === 'falhou')) item.status = 'falhou';
         else item.status = 'aguardando';
         return item.status;
@@ -140,7 +159,7 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
         let algum = false;
         for (const destino of destinosDoItem(item)) {
             const resultado = item.resultados?.[destino];
-            if (!resultado || resultado.estado !== 'incerto') continue;
+            if (!resultado || !['incerto', 'em andamento'].includes(resultado.estado)) continue;
             try {
                 const encontrado = await reconciliador({ item: clonar(item), destino });
                 if (encontrado?.id) {
@@ -162,13 +181,17 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
         const planejadoEm = instantePlanejado === null ? null : new Date(instantePlanejado).toISOString();
         if (!destinos.length) { item.status = 'bloqueado'; item.motivo = 'Nenhum destino configurado.'; return 'bloqueado'; }
         if (!aprovacaoValida(item)) { item.status = 'bloqueado'; item.motivo = 'Aprovação inválida: o item foi alterado e precisa de nova aprovação.'; registrar('SCHEDULING', 'blocked', { operationId: item.id, reason: 'approval_invalid', result: 'bloqueado' }); return 'bloqueado'; }
+        const elegibilidade = PlanejamentoSemanal.avaliarParaDestinos(item, destinos);
+        if (!elegibilidade.elegivel) { item.status = 'bloqueado'; item.motivo = elegibilidade.motivo; registrar('SCHEDULING', 'blocked', { operationId: item.id, reason: 'organic_media_ineligible', result: 'bloqueado' }); return 'bloqueado'; }
         const semUrl = item.tipo === 'carrossel' ? !(item.itens || []).length || item.itens.some(entrada => !entrada.url) : !item.url;
         if (semUrl) { item.status = 'bloqueado'; item.motivo = 'Mídia sem URL pública; publique manualmente ou informe uma URL acessível pelo provedor.'; registrar('SCHEDULING', 'blocked', { operationId: item.id, reason: 'missing_public_url', result: 'bloqueado' }); return 'bloqueado'; }
         for (const destino of destinos) {
             const atual = item.resultados?.[destino]?.estado;
-            if (atual === 'confirmada') continue;
+            if (['confirmada', 'incerto', 'em andamento'].includes(atual)) continue;
             const tentativaId = `${item.id}:${destino}:${agoraISO(agora())}`;
             registrarResultado(item, destino, { estado: 'em andamento', tentativaId, iniciadoEm: agoraISO(agora()) });
+            item.status = 'em andamento';
+            persistir();
             try {
                 const resultado = await publicador({ item: clonar(item), destino, tentativaId });
                 if (!resultado?.id) throw Object.assign(new Error('O provedor não confirmou o identificador da publicação.'), { codigo: 'PUBLICACAO_INDETERMINADA' });
@@ -184,6 +207,9 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
                 });
                 registrar('SCHEDULING', incerto ? 'uncertain' : 'failed', { operationId: item.id, destino, code: erro.codigo || 'FALHA', message: erro.message, plannedAt: planejadoEm, effectiveAt: agoraISO(agora()), attempts: tentativas, result: incerto ? 'resultado ainda não confirmado' : 'falhou' });
             }
+            // Confirma cada destino no disco antes de iniciar o seguinte.
+            consolidarItem(item);
+            persistir();
         }
         return consolidarItem(item);
     }
@@ -204,7 +230,7 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
                 for (const item of plano.itens || []) {
                     if (!['aprovado', 'incerto', 'em andamento', 'aguardando'].includes(item.status)) continue;
                     if (emAndamento.has(item.id)) continue;
-                    if (item.status === 'incerto' || item.status === 'em andamento') {
+                    if (item.status === 'incerto' || item.status === 'em andamento' || temResultadoPendente(item)) {
                         emAndamento.add(item.id);
                         try { if (await reconciliarItem(item)) resumo.reconciliados++; } finally { emAndamento.delete(item.id); }
                         continue;
@@ -230,7 +256,9 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
                 }
                 if (resumo.executados >= maxPorCiclo) break;
             }
-        } finally { persistir(); cicloAtivo = false; }
+        } finally {
+            try { persistir(); } finally { cicloAtivo = false; }
+        }
         return resumo;
     }
 
@@ -238,7 +266,7 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
         const plano = estado.planos.find(item => item.id === planoId);
         if (!plano) return null;
         plano.status = 'pausado';
-        plano.itens = plano.itens.map(item => item.status === 'em andamento' ? item : { ...item, status: 'pausado' });
+        plano.itens = plano.itens.map(item => ['aprovado', 'aguardando'].includes(item.status) && !temResultadoPendente(item) ? { ...item, status: 'pausado' } : item);
         persistir();
         return clonar(plano);
     }
@@ -264,7 +292,7 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
     /** Reabilita manualmente um item que falhou, sem reenvio automático. */
     function reagendarItem(planoId, itemId) {
         const { plano, item } = localizar(planoId, itemId);
-        if (!plano || !item || item.status === 'em andamento' || item.status === 'confirmada') return null;
+        if (!plano || !item || item.status === 'em andamento' || item.status === 'confirmada' || temResultadoPendente(item)) return null;
         item.status = aprovacaoValida(item) ? 'aprovado' : 'rascunho';
         item.motivo = null;
         persistir();
@@ -275,22 +303,28 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
 }
 
 /** Adapta um item de agendamento para uma chamada única de InstagramService.publish(). */
-function publicarItemNoInstagram(instagram) {
+function publicarItemNoInstagram(instagram, estadoMeta = null) {
     return async ({ item, destino }) => {
-        if (destino !== 'Instagram') throw Object.assign(new Error('Destino não implementado.'), { codigo: 'DESTINO_NAO_IMPLEMENTADO' });
+        if (!DESTINOS.includes(destino) || destino === 'Facebook Page') throw Object.assign(new Error('Destino não implementado neste adaptador Instagram.'), { codigo: 'DESTINO_NAO_IMPLEMENTADO' });
         const caption = item.legenda || '';
-        if (item.tipo === 'carrossel') {
-            const resultado = await instagram.publish({ formato: 'carrossel', itens: Array.isArray(item.itens) ? item.itens : [], caption, publicacaoId: item.mediaId });
-            return { id: resultado.mediaId };
-        }
-        const formato = item.tipo === 'video' ? 'reel' : 'imagem';
+        const story = destino === 'Instagram Story';
+        if (story && item.tipo === 'carrossel') throw Object.assign(new Error('Carrossel não é convertido automaticamente em Stories.'), { codigo: 'STORY_CARROSSEL_NAO_SUPORTADO' });
+        const formato = story ? 'story' : item.tipo === 'carrossel' ? 'carrossel' : item.tipo === 'video' ? 'reel' : 'imagem';
+        const chave = `agenda:${item.id}:${destino}`;
+        const assinatura = PlanejamentoSemanal.assinar({ tipo: formato, url: item.url, itens: item.itens, legenda: story ? '' : caption });
+        const salvo = estadoMeta?.obter?.(chave);
         const resultado = await instagram.publish({
             formato,
+            itens: formato === 'carrossel' ? (Array.isArray(item.itens) ? item.itens : []) : undefined,
             mediaUrl: item.url,
-            imageUrl: formato === 'imagem' ? item.url : undefined,
-            videoUrl: formato === 'reel' ? item.url : undefined,
-            caption,
-            publicacaoId: item.mediaId
+            imageUrl: formato === 'imagem' || (story && item.tipo !== 'video') ? item.url : undefined,
+            videoUrl: formato === 'reel' || (story && item.tipo === 'video') ? item.url : undefined,
+            storyTipo: story ? (item.tipo === 'video' ? 'video' : 'imagem') : null,
+            caption: story ? '' : caption,
+            publicacaoId: chave,
+            containerId: salvo?.assinatura === assinatura ? salvo.containerId : null,
+            mediaIdConhecido: salvo?.assinatura === assinatura ? salvo.mediaId : null,
+            aoEstado: estado => estadoMeta?.salvar?.(chave, { assinatura, formato, ...estado })
         });
         return { id: resultado.mediaId };
     };

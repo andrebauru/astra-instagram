@@ -16,6 +16,8 @@ const arquivos = {
     '/diagnostico.js': ['diagnostico.js', 'text/javascript'],
     '/integracao-regras.js': ['integracao-regras.js', 'text/javascript'],
     '/fluxo-editorial.js': ['fluxo-editorial.js', 'text/javascript'],
+    '/logs.js': ['logs.js', 'text/javascript'],
+    '/meta-conexao.js': ['meta-conexao.js', 'text/javascript'],
     '/painel.js': ['painel.js', 'text/javascript'],
     '/agendamentos.js': ['agendamentos.js', 'text/javascript']
 };
@@ -30,7 +32,7 @@ function servirPainel(req, res, rota = req.url.split('?')[0]) {
             'Content-Type': `${arquivo[1]}; charset=utf-8`,
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
-            'Content-Security-Policy': "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' data: blob:; connect-src 'self' http://127.0.0.1:8080 http://localhost:8080; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+            'Content-Security-Policy': "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: data: blob:; connect-src 'self' http://127.0.0.1:8080 http://localhost:8080; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
         });
         res.end(req.method === 'HEAD' ? undefined : dados);
     });

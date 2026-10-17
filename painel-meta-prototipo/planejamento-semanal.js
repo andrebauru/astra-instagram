@@ -62,6 +62,44 @@ function urlDaMidia(midia = {}) {
     return typeof valor === 'string' && /^https?:\/\//i.test(valor) ? valor : null;
 }
 
+/** Identifica conteúdo visual antes do ID para detectar cópias da mesma imagem. */
+function identidadeVisual(midia = {}) {
+    if (midia.sha256) return `sha256:${String(midia.sha256).toLowerCase()}`;
+    const url = urlDaMidia(midia);
+    if (url) return `url:${url}`;
+    if (midia.dados) return `dados:${midia.dados}`;
+    if (midia.arquivo) return `arquivo:${midia.arquivo}:${midia.tamanho || 0}`;
+    if (midia.nome) return `nome:${midia.nome}:${midia.tamanho || 0}`;
+    return midia.id || midia.mediaId || null;
+}
+
+/** Regra única de elegibilidade para agendamento orgânico. */
+function avaliarElegibilidadeOrganica(midia = {}) {
+    if (['video', 'reel'].includes(midia.tipo)) return { elegivel: true, motivo: null, imagensDistintas: 0 };
+    const itens = Array.isArray(midia.itens) ? midia.itens : Array.isArray(midia.imagens) ? midia.imagens : [];
+    if (midia.tipo !== 'carrossel') return { elegivel: false, motivo: 'Imagem única não é elegível: o agendamento orgânico exige no mínimo 3 imagens distintas.', imagensDistintas: itens.length ? new Set(itens.map(identidadeVisual).filter(Boolean)).size : 1 };
+    const imagens = itens.filter(item => item.tipo !== 'video');
+    const distintas = new Set(imagens.map(identidadeVisual).filter(Boolean)).size;
+    if (imagens.length < 3) return { elegivel: false, motivo: 'Post com imagens não elegível: informe no mínimo 3 imagens distintas.', imagensDistintas: distintas };
+    if (distintas < 3 || distintas !== imagens.length) return { elegivel: false, motivo: 'Post não elegível: existem imagens repetidas. Use pelo menos 3 imagens diferentes, sem duplicidade.', imagensDistintas: distintas };
+    return { elegivel: true, motivo: null, imagensDistintas: distintas };
+}
+
+/** Aplica limites por destino sem mudar a regra orgânica Instagram existente. */
+function avaliarParaDestinos(midia, destinos = []) {
+    if (destinos.includes('Facebook Page')) {
+        const itens = midia.itens || midia.imagens || [];
+        if (midia.tipo === 'carrossel' && (itens.length < 2 || itens.length > 10 || itens.some(i => i.tipo === 'video'))) return { elegivel: false, motivo: 'Facebook aceita de 2 a 10 fotos, sem vídeos no conjunto.' };
+        if (destinos.every(d => d === 'Facebook Page') && ['imagem', 'video', 'reel', 'carrossel'].includes(midia.tipo)) return { elegivel: true, motivo: null };
+    }
+    return avaliarElegibilidadeOrganica(midia);
+}
+
+/** Inclui a identidade da Página sem invalidar aprovações Instagram legadas. */
+function dadosAprovacao(item) {
+    return { mediaId: item.mediaId, data: item.data, hora: item.hora, timezone: item.timezone, destinos: item.destinos, legenda: item.legenda, ...(item.destinos?.includes('Facebook Page') ? { facebookPageId: item.facebookPageId || null } : {}) };
+}
+
 /** Informa quantas mídias elegíveis faltam e por quê. */
 function pendenciasDeExecucao(plano = {}) {
     return (plano.itens || []).map(item => ({
@@ -74,7 +112,9 @@ function pendenciasDeExecucao(plano = {}) {
 function planejar(config, midias = []) {
     const erros = validarConfiguracao(config); if (erros.length) return { valido: false, erros, faltam: 0, itens: [] };
     const tipos = config.tipos?.length ? config.tipos : ['imagem', 'video', 'carrossel'];
-    const elegiveis = midias.filter(item => tipos.includes(item.tipo) && !['reservada', 'utilizada'].includes(item.status));
+    const avaliadas = midias.map(item => ({ item, avaliacao: avaliarParaDestinos(item, config.destinos) }));
+    const inelegiveis = avaliadas.filter(entrada => !entrada.avaliacao.elegivel).map(entrada => ({ id: entrada.item.id, motivo: entrada.avaliacao.motivo }));
+    const elegiveis = avaliadas.filter(entrada => entrada.avaliacao.elegivel).map(entrada => entrada.item).filter(item => tipos.includes(item.tipo) && !['reservada', 'utilizada'].includes(item.status));
     const datas = datasDoPeriodo(config.inicio, config.fim, config.dias.map(Number));
     const slots = datas.flatMap(data => config.horarios.slice(0, Number(config.porDia)).map(hora => ({ data, hora })));
     let selecionaveis = config.modo === 'equilibrado' ? ordenarEquilibrado(embaralharDeterministico(elegiveis, config.semente), tipos) : embaralharDeterministico(elegiveis, config.semente);
@@ -83,15 +123,17 @@ function planejar(config, midias = []) {
     const itens = slots.slice(0, selecionaveis.length).map((slot, indice) => {
         const midia = selecionaveis[indice];
         const carrossel = Array.isArray(midia.itens) && midia.itens.length ? midia.itens.map((item, ordem) => ({ mediaId: item.id || item.mediaId, ordem, tipo: item.tipo, url: urlDaMidia(item) })) : null;
-        return { id: `${config.id}:${slot.data}:${slot.hora}:${indice}`, mediaId: midia.id, tipo: midia.tipo, miniatura: midia.miniatura || midia.dados || null, url: urlDaMidia(midia), itens: carrossel, data: slot.data, hora: slot.hora, timezone: config.timezone, destinos: ['Instagram'], legenda: midia.legenda || '', status: 'rascunho', approvalSignature: null, atraso: config.atraso || 'reagendar', toleranciaMinutos: Number(config.toleranciaMinutos) || 30, resultados: {} };
+        const destinos = (config.destinos?.length ? [...config.destinos] : ['Instagram Feed']).filter(destino => !(midia.tipo === 'carrossel' && destino === 'Instagram Story'));
+        return { id: `${config.id}:${slot.data}:${slot.hora}:${indice}`, mediaId: midia.id, tipo: midia.tipo, miniatura: midia.miniatura || midia.dados || null, url: urlDaMidia(midia), itens: carrossel, data: slot.data, hora: slot.hora, timezone: config.timezone, destinos, facebookPageId: config.facebookPageId || null, legenda: midia.legenda || '', status: 'rascunho', approvalSignature: null, atraso: config.atraso || 'reagendar', toleranciaMinutos: Number(config.toleranciaMinutos) || 30, resultados: {} };
     });
-    return { valido: faltam === 0, erros: faltam ? [`Faltam ${faltam} mídia(s) elegível(is) para preencher a semana sem repetição.`] : [], faltam, id: config.id, criadoEm: new Date().toISOString(), status: 'rascunho', config: structuredClone(config), itens };
+    const justificativas = [...new Set(inelegiveis.map(item => item.motivo))];
+    return { valido: faltam === 0, erros: faltam ? [`Faltam ${faltam} mídia(s) elegível(is) para preencher a semana sem repetição.`, ...justificativas] : [], inelegiveis, faltam, id: config.id, criadoEm: new Date().toISOString(), status: 'rascunho', config: structuredClone(config), itens };
 }
 
 /** Aprova exatamente a versão revisada de cada item. */
 function aprovar(plano) {
     const copia = structuredClone(plano); copia.status = 'aprovado'; copia.aprovadoEm = new Date().toISOString();
-    copia.itens = copia.itens.map(item => ({ ...item, status: 'aprovado', approvalSignature: assinar({ mediaId: item.mediaId, data: item.data, hora: item.hora, timezone: item.timezone, destinos: item.destinos, legenda: item.legenda }) }));
+    copia.itens = copia.itens.map(item => ({ ...item, status: 'aprovado', approvalSignature: assinar(dadosAprovacao(item)) }));
     return copia;
 }
 
@@ -176,10 +218,12 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
     const fimMs = fimDoPeriodo(config.fim, timezone);
 
     const tiposAceitos = config.tipos?.length ? config.tipos : ['imagem', 'video', 'carrossel'];
-    const estoque = (Array.isArray(midias) ? midias : []).filter(m => tiposAceitos.includes(m.tipo) && m.status !== 'utilizada');
+    const avaliadas = (Array.isArray(midias) ? midias : []).map(item => ({ item, avaliacao: avaliarParaDestinos(item, config.destinos) }));
+    const inelegiveis = avaliadas.filter(entrada => !entrada.avaliacao.elegivel).map(entrada => ({ id: entrada.item.id, motivo: entrada.avaliacao.motivo }));
+    const estoque = avaliadas.filter(entrada => entrada.avaliacao.elegivel).map(entrada => entrada.item).filter(m => tiposAceitos.includes(m.tipo) && m.status !== 'utilizada');
     let indiceMidia = 0;
     const usadas = new Set();
-    const precisaMidia = estoque.length > 0;
+    const precisaMidia = avaliadas.length > 0;
     if (precisaMidia && !config.permitirReutilizacao && estoque.length < quantidade) {
         // Ainda gera o que for possível; informa quantas faltam.
     }
@@ -202,7 +246,7 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
                 if (Number.isFinite(intervaloMax) && intervaloMax > 0 && deltaHoras > intervaloMax) continue;
             }
             let midia = null;
-            if (estoque.length) {
+            if (precisaMidia) {
                 if (!config.permitirReutilizacao) {
                     midia = estoque.find(m => !usadas.has(m.id));
                 } else {
@@ -219,7 +263,8 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
                 url: midia ? urlDaMidia(midia) : null,
                 itens: midia && Array.isArray(midia.itens) && midia.itens.length ? midia.itens.map((e, ordem) => ({ mediaId: e.id || e.mediaId, ordem, tipo: e.tipo, url: urlDaMidia(e) })) : null,
                 data, hora, scheduledAt: new Date(instante).toISOString(), timezone,
-                destinos: ['Instagram'],
+                destinos: (config.destinos?.length ? [...config.destinos] : ['Instagram Feed']).filter(destino => !(midia?.tipo === 'carrossel' && destino === 'Instagram Story')),
+                facebookPageId: config.facebookPageId || null,
                 legenda: midia ? (midia.legenda || '') : '',
                 legendaEditorial: midia ? (midia.legendaEditorial || '') : '',
                 publicacaoId: midia?.publicacaoId || null,
@@ -236,7 +281,8 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
     const faltam = Math.max(0, quantidade - itens.length);
     return {
         valido: faltam === 0 && faltamMidia === 0,
-        erros: faltam ? [`Faltam ${faltam} horário(s) possível(is) no período para atingir a quantidade.`] : (faltamMidia ? [`Faltam ${faltamMidia} mídia(s); ative a reutilização ou adicione mais arquivos.`] : []),
+        erros: faltam ? [`Faltam ${faltam} horário(s) possível(is) no período para atingir a quantidade.`, ...new Set(inelegiveis.map(item => item.motivo))] : (faltamMidia ? [`Faltam ${faltamMidia} mídia(s); ative a reutilização ou adicione mais arquivos.`, ...new Set(inelegiveis.map(item => item.motivo))] : []),
+        inelegiveis,
         faltam, faltamMidia,
         id: config.id || `periodo-${Date.now()}`,
         nome: config.nome || 'Plano por período',
@@ -258,6 +304,6 @@ function liberarMidias(plano, midias = []) {
     return midias.map(midia => midia.status === 'reservada' && (midia.planoId === plano.id || usados.has(midia.id)) ? { ...midia, status: 'disponível', planoId: null } : midia);
 }
 
-const PlanejamentoSemanal = { assinar, validarConfiguracao, pendenciasDeExecucao, embaralharDeterministico, datasDoPeriodo, urlDaMidia, planejar, planejarPeriodo, aprovar, editarItem, pausar, cancelarItem, criarCarrossel, reservarMidias, liberarMidias };
+const PlanejamentoSemanal = { assinar, dadosAprovacao, avaliarParaDestinos, validarConfiguracao, pendenciasDeExecucao, identidadeVisual, avaliarElegibilidadeOrganica, embaralharDeterministico, datasDoPeriodo, urlDaMidia, planejar, planejarPeriodo, aprovar, editarItem, pausar, cancelarItem, criarCarrossel, reservarMidias, liberarMidias };
 if (typeof module !== 'undefined') module.exports = PlanejamentoSemanal;
 else globalThis.PlanejamentoSemanal = PlanejamentoSemanal;

@@ -12,7 +12,10 @@
 function migrarPublicacao(p) {
     p.versao = 2;
     p.criadaEm ??= null;
-    p.tipoMidia ??= 'imagem';
+    p.tipoMidia = normalizarTipoMidia(p.tipoMidia) || 'imagem';
+    p.publicarStory ??= false; p.resultadosPublicacao ??= {};
+    p.publicarInstagram ??= true; p.publicarFacebook ??= false;
+    p.publicarFacebookStory ??= false;
     p.imagemUrl ??= ''; p.videoUrl ??= '';
     p.tema ??= ''; p.fatos ??= ''; p.fatosIa ??= ''; p.textoMidia ??= ''; p.contexto ??= ''; p.objetivo ??= '';
     p.legenda ??= '';
@@ -26,6 +29,7 @@ function migrarPublicacao(p) {
     p.estado ??= 'rascunho';
     p.statusPublicacao ??= 'nao_publicada';
     p.instagramMediaId ??= null; p.permalink ??= null; p.publicadoEm ??= null; p.erroPublicacao ??= null;
+    p.containerPublicacaoId ??= null; p.containerStoryId ??= null; p.estadoContainerPublicacao ??= null;
     p.tentativasPublicacao = Array.isArray(p.tentativasPublicacao) ? p.tentativasPublicacao : [];
     p.imagens = (Array.isArray(p.imagens) ? p.imagens : []).map(item => ({
         id: item.id || globalThis.crypto?.randomUUID?.() || `midia-${Date.now()}`,
@@ -35,6 +39,8 @@ function migrarPublicacao(p) {
         tipo: item.tipo || (String(item.mime || '').startsWith('video/') ? 'video' : 'imagem'),
         mime: item.mime || '',
         tamanho: item.tamanho || 0,
+        arquivo: item.arquivo || '',
+        sha256: item.sha256 || '',
         duracao: item.duracao ?? null,
         status: item.status || 'disponível',
         statusProcessamento: item.statusProcessamento || 'concluído',
@@ -42,6 +48,23 @@ function migrarPublicacao(p) {
         tags: Array.isArray(item.tags) ? item.tags : []
     }));
     return p;
+}
+
+/** Converte rótulos visuais/legados no contrato interno usado pela revisão. */
+function normalizarTipoMidia(valor) {
+    const tipo = String(valor || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (tipo === 'imagem' || tipo === 'imagem unica') return 'imagem';
+    if (tipo === 'carrossel' || tipo === 'carrossel local') return 'carrossel';
+    if (tipo === 'reel') return 'reel';
+    return '';
+}
+
+/** Atualiza o tipo interno somente quando o valor pertence ao contrato aceito. */
+function definirTipoMidia(publicacao, valor) {
+    const tipo = normalizarTipoMidia(valor);
+    if (!publicacao || !tipo) return false;
+    publicacao.tipoMidia = tipo;
+    return true;
 }
 
 /**
@@ -62,6 +85,7 @@ function registrarUrlPublica(publicacao, midiaId, urlPublica, meta = {}) {
     midia.statusUpload = 'concluído';
     if (meta.bytes !== undefined && meta.bytes !== null) midia.tamanho = meta.bytes;
     if (meta.filename) midia.arquivo = meta.filename;
+    if (meta.sha256) midia.sha256 = meta.sha256;
 
     const indice = publicacao.imagens.indexOf(midia);
     if (publicacao.tipoMidia === 'imagem') {
@@ -94,7 +118,7 @@ function podeIniciarPublicacao(publicacao) {
 /** Registra a intenção antes do envio e mantém o histórico para retry auditável. */
 function iniciarTentativa(publicacao, tentativaId, iniciadoEm = new Date().toISOString()) {
     if (!podeIniciarPublicacao(publicacao) || !tentativaId) return null;
-    const tentativa = { estado: 'enviando', tentativaId, iniciadoEm };
+    const tentativa = { estado: 'enviando', tentativaId, iniciadoEm, containerId: publicacao.containerPublicacaoId || null };
     publicacao.statusPublicacao = 'publicando';
     publicacao.erroPublicacao = null;
     publicacao.publicacaoReal = tentativa;
@@ -119,9 +143,11 @@ function atualizarHistoricoTentativa(publicacao) {
 function registrarPublicacao(publicacao, resultado = {}) {
     if (!publicacao) return null;
     if (resultado.erro) {
+        if (resultado.containerId) publicacao.containerPublicacaoId = resultado.containerId;
+        if (resultado.estadoContainer) publicacao.estadoContainerPublicacao = resultado.estadoContainer;
         publicacao.statusPublicacao = 'falhou';
         publicacao.erroPublicacao = resultado.erro;
-        publicacao.publicacaoReal = { estado: 'incerto', mensagem: resultado.erro, idPublicado: publicacao.instagramMediaId || null };
+        publicacao.publicacaoReal = { estado: 'incerto', mensagem: resultado.erro, idPublicado: publicacao.instagramMediaId || null, containerId: publicacao.containerPublicacaoId || null, estadoContainer: publicacao.estadoContainerPublicacao || null };
         if (publicacao.tentativasPublicacao?.length) {
             const ultima = publicacao.tentativasPublicacao.at(-1);
             publicacao.publicacaoReal.tentativaId = ultima.tentativaId;
@@ -132,6 +158,8 @@ function registrarPublicacao(publicacao, resultado = {}) {
     }
     if (!resultado.mediaId) return null;
     publicacao.statusPublicacao = 'publicado';
+    if (resultado.containerId) publicacao.containerPublicacaoId = resultado.containerId;
+    publicacao.estadoContainerPublicacao = 'PUBLISHED';
     publicacao.instagramMediaId = resultado.mediaId;
     publicacao.permalink = resultado.permalink || publicacao.permalink || null;
     publicacao.publicadoEm = resultado.publicadoEm || new Date().toISOString();
@@ -183,6 +211,6 @@ function validarEtapa(etapa, publicacao, { midiaPublicaPronta = false, errosDeCo
     return erros;
 }
 
-const Publicacoes = { migrarPublicacao, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo, podeIniciarPublicacao, iniciarTentativa, registrarPublicacao, statusPublicacaoVisual, proximaEtapa, validarEtapa, ETAPAS };
+const Publicacoes = { migrarPublicacao, normalizarTipoMidia, definirTipoMidia, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo, podeIniciarPublicacao, iniciarTentativa, registrarPublicacao, statusPublicacaoVisual, proximaEtapa, validarEtapa, ETAPAS };
 if (typeof module !== 'undefined') module.exports = Publicacoes;
 else globalThis.Publicacoes = Publicacoes;

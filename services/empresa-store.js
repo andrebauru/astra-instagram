@@ -23,8 +23,12 @@ function criarStoreEmpresa(caminho) {
     function salvar(estado) {
         try {
             fs.mkdirSync(path.dirname(caminho), { recursive: true });
-            const temporario = `${caminho}.tmp`;
-            fs.writeFileSync(temporario, JSON.stringify(estado, null, 2), { encoding: 'utf8', mode: 0o600 });
+            const temporario = `${caminho}.${process.pid}.tmp`;
+            const descritor = fs.openSync(temporario, 'w', 0o600);
+            try {
+                fs.writeFileSync(descritor, JSON.stringify(estado, null, 2), 'utf8');
+                fs.fsyncSync(descritor);
+            } finally { fs.closeSync(descritor); }
             fs.renameSync(temporario, caminho);
             return true;
         } catch { return false; }
@@ -34,8 +38,9 @@ function criarStoreEmpresa(caminho) {
         const estado = ler();
         estado[campo] = valor;
         estado.atualizadoEm = new Date().toISOString();
-        salvar(estado);
-        return valor;
+        if (!salvar(estado)) return null;
+        const confirmado = ler()[campo];
+        return JSON.stringify(confirmado) === JSON.stringify(valor) ? confirmado : null;
     }
 
     return {

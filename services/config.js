@@ -10,6 +10,9 @@
 const path = require('node:path');
 
 const RAIZ = path.resolve(__dirname, '..');
+const { criarStoreIntegracoes } = require('./integracoes-store');
+const storeIntegracoes = criarStoreIntegracoes(process.env.ASTRA_INTEGRACOES_ARQUIVO || path.join(RAIZ, 'dados', 'integracoes.json'));
+storeIntegracoes.carregar();
 
 /** Modelo padrão do Astra via OpenRouter; permanece configurável. */
 const MODELO_PADRAO = 'z-ai/glm-5.3-flash';
@@ -22,7 +25,7 @@ function lerInteiro(valor, padrao) {
     return Number.isFinite(numero) && numero > 0 ? numero : padrao;
 }
 
-const config = Object.freeze({
+const config = {
     porta: lerInteiro(process.env.PORT, 8080),
     build: process.env.ASTRA_BUILD_ID || 'astra-instagram-2',
 
@@ -47,17 +50,29 @@ const config = Object.freeze({
         uploadUrl: process.env.MEDIA_UPLOAD_URL || '',
         uploadKey: process.env.MEDIA_UPLOAD_KEY || '',
         basePublicaUrl: process.env.MEDIA_PUBLIC_BASE_URL || '',
-        verificacaoTimeoutMs: lerInteiro(process.env.MEDIA_PUBLIC_VERIFY_TIMEOUT_MS, 30000)
+        verificacaoTimeoutMs: lerInteiro(process.env.MEDIA_PUBLIC_VERIFY_TIMEOUT_MS, 30000),
+        uploadTimeoutMs: lerInteiro(process.env.MEDIA_UPLOAD_TIMEOUT_MS, 600000)
     }),
 
     timezone: TIMEZONE_PADRAO,
 
     arquivos: Object.freeze({
         empresa: process.env.ASTRA_EMPRESA_ARQUIVO || path.join(RAIZ, 'dados', 'empresa.json'),
+        templates: process.env.ASTRA_TEMPLATES_ARQUIVO || path.join(RAIZ, 'dados', 'templates.json'),
+        publicacoes: process.env.ASTRA_PUBLICACOES_ARQUIVO || path.join(RAIZ, 'dados', 'publicacoes.json'),
+        publicacoesMeta: process.env.ASTRA_PUBLICACOES_META_ARQUIVO || path.join(RAIZ, 'dados', 'publicacoes-meta.json'),
         agendador: process.env.ASTRA_AGENDADOR_ARQUIVO || path.join(RAIZ, 'dados', 'agendamentos.json'),
         metricas: process.env.ASTRA_METRICAS_ARQUIVO || path.join(RAIZ, 'dados', 'metricas-organicas.json')
     })
-});
+};
+
+/** Aplica as credenciais salvas sem reiniciar o processo. */
+function recarregarIntegracoes() {
+    config.instagram = { ...config.instagram, token: process.env.INSTAGRAM_ACCESS_TOKEN || '', accountId: process.env.INSTAGRAM_ACCOUNT_ID || '', versao: process.env.META_GRAPH_VERSION || '' };
+    config.ia = { ...config.ia, chave: process.env.OPENROUTER_API_KEY || '' };
+    config.facebook = { pageId: process.env.FACEBOOK_PAGE_ID || '', token: process.env.FACEBOOK_PAGE_ACCESS_TOKEN || '', versao: process.env.FACEBOOK_GRAPH_VERSION || process.env.META_GRAPH_VERSION || '' };
+}
+recarregarIntegracoes();
 
 /** Indica quais integrações estão prontas, sem revelar valores. */
 function capacidades() {
@@ -68,4 +83,4 @@ function capacidades() {
     };
 }
 
-module.exports = { config, capacidades, MODELO_PADRAO, TIMEZONE_PADRAO };
+module.exports = { config, capacidades, MODELO_PADRAO, TIMEZONE_PADRAO, storeIntegracoes, recarregarIntegracoes };

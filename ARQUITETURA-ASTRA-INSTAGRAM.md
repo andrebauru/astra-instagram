@@ -6,16 +6,18 @@ coerentes.
 
 ## 1. Escopo
 
-O Astra Instagram possui apenas estes blocos:
+O Astra Instagram mantém estes blocos principais:
 
 ```text
 Instagram · IA · Upload de mídia · Geração de conteúdo · Revisão ·
 Publicação imediata · Agendamento
 ```
 
-Facebook, Meta Ads, campanhas, conjuntos, anúncios, orçamento, posicionamentos,
-impulsionamento e sincronização de publicações existentes **foram removidos do
-código**. Se publicidade paga voltar, deve ser um módulo separado.
+Facebook foi reintegrado como destino orgânico opcional, com serviço próprio,
+seleção explícita de Página e assistente OAuth separado da conexão Instagram.
+Meta Ads, campanhas, conjuntos, anúncios, orçamento, posicionamentos e
+impulsionamento não fazem parte desse assistente. Publicidade paga deve continuar
+separada. Consulte [Conexão Meta](docs/CONEXAO-META.md) para configuração e limitações.
 
 ## 2. Fluxo principal
 
@@ -44,8 +46,9 @@ manualmente e publicar/agendar quando a mídia tiver URL pública.
                     Instagram API
 ```
 
-Regra: **uma ação = um caminho**. Publicação imediata e agendamento usam a mesma
-função `InstagramService.publish()`.
+Regra: **uma ação = um caminho por destino**. Publicação imediata e agendamento
+reutilizam `InstagramService.publish()` para Instagram e `FacebookService.publish()`
+para Facebook. O assistente Facebook não substitui os tokens Instagram existentes.
 
 ## 4. Serviços (backend)
 
@@ -72,11 +75,25 @@ Meta. Nunca armazena mídia nem decide agendamento.
 
 ### `services/scheduler-service.js` — SchedulerService
 Cuida de data, hora, timezone IANA, persistência do agendamento, execução no
-momento correto, status e cancelamento. No horário, chama
-`InstagramService.publish()` (via `publicarItemNoInstagram`). Não duplica a
-lógica da Meta. Recursos: trava de concorrência, retomada após reinício,
+momento correto, status e cancelamento. No horário, chama o adaptador correspondente ao destino: Instagram via
+`publicarItemNoInstagram` ou Facebook via publicador injetado pelo servidor.
+Não duplica a lógica da Meta. Recursos: trava de concorrência, retomada após reinício,
 deduplicação, resultados por destino, reconciliação de resultado incerto antes de
-reenviar e política explícita de atraso com limite por ciclo.
+reenviar e política explícita de atraso com limite por ciclo. Tentativas e resultados
+por destino exigem persistência antes de prosseguir; falha de gravação interrompe
+o ciclo. Resultados incertos não são liberados pelo reagendamento. Arquivo
+corrompido bloqueia o carregamento sem apagar o histórico.
+
+### Conexão Facebook e segredos
+
+- `services/meta-conexao-service.js`: OAuth confidencial, state descartável,
+  diagnóstico de permissões, descoberta e seleção explícita de Página.
+- `services/facebook-service.js`: publicação orgânica com token de Página,
+  resultados persistidos e bloqueio de reenvio quando a confirmação é incerta.
+- `services/sessao-local.js`: sessão local HttpOnly e validação CSRF.
+- `services/cofre-local.js`: AES-256-GCM e chave protegida por DPAPI no Windows.
+- `services/integracoes-store.js`: sobreposições privadas de configuração,
+  sem devolver segredos ao painel nem modificar o `.env`.
 
 ### `services/empresa-store.js` — Store de configuração
 Persiste o template fixo e a agenda padrão da empresa em arquivo fora de
@@ -139,7 +156,9 @@ A UI coordena o usuário e chama os serviços via `integracao-regras.js`.
 | Agendamentos e execução | `dados/agendamentos.json` (servidor) |
 | Template/agenda da empresa | `dados/empresa.json` (servidor) |
 | Diagnóstico | `logs/astra-debug-YYYY-MM-DD.log` |
-| Credenciais | `.env` (nunca no frontend) |
+| Credenciais base | `.env` (não cifrado; nunca no frontend) |
+| Sobreposições privadas | `dados/integracoes.json` cifrado |
+| Conexão OAuth Facebook | `dados/meta-conexao.json` cifrado |
 
 ## 8. Configuração
 

@@ -5,6 +5,7 @@ const { urlPublica } = require('./painel-meta-prototipo/integracao-regras');
 /** Valida uma única imagem sem buscá-la no servidor ou aceitar arquivos arbitrários. */
 function validarImagem(imagem) {
     if (!imagem) return null;
+    if (typeof imagem === 'string' && imagem.startsWith('data:video/')) throw erroSeguro('VIDEO_REQUER_QUADROS', 'Prepare os quadros do MP4 no painel antes de solicitar a análise visual.', 400);
     if (typeof imagem !== 'string' || imagem.length > 7_000_000) throw erroSeguro('IMAGEM_INVALIDA', 'Use uma imagem JPEG, PNG ou WebP de até 5 MB.', 400);
     if (imagem.startsWith('https://') && urlPublica(imagem)) return imagem;
     const partes = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(imagem);

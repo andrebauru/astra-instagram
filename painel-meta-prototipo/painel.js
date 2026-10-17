@@ -25,23 +25,101 @@ let enviandoPublicacao = false;
 let confirmacaoAtual;
 let temporizador;
 let perfilInstagram;
+let perfilFacebook;
+let integracoesCarregadas = {};
+const camposIntegracoes = ['META_APP_ID', 'META_APP_SECRET', 'META_LOGIN_CONFIG_ID', 'META_REDIRECT_URI', 'FACEBOOK_GRAPH_VERSION', 'INSTAGRAM_ACCOUNT_ID', 'INSTAGRAM_ACCESS_TOKEN', 'FACEBOOK_PAGE_ID', 'FACEBOOK_PAGE_ACCESS_TOKEN', 'OPENROUTER_API_KEY', 'META_GRAPH_VERSION'];
+
+/** Mostra IDs e apenas a presença dos segredos armazenados no backend. */
+async function carregarIntegracoes() {
+    try {
+        const resposta = await cliente.solicitar('/config/integracoes');
+        integracoesCarregadas = resposta.configuracoes;
+        for (const campo of camposIntegracoes) {
+            const input = $('config-' + campo);
+            if (input.type === 'password') { input.value = ''; input.placeholder = resposta.configuracoes[campo] ? 'Configurado · deixe vazio para manter' : 'Não configurado'; }
+            else input.value = resposta.configuracoes[campo] || '';
+        }
+    } catch (erro) { $('status-integracoes').textContent = erro.message; }
+}
+
+/** Salva credenciais sem persistir segredos no estado editorial ou no navegador. */
+async function salvarIntegracoes(evento) {
+    evento.preventDefault();
+    $('salvar-integracoes').disabled = true;
+    try {
+        const entrada = Object.fromEntries(camposIntegracoes.filter(campo => {
+            const input = $('config-' + campo);
+            return input.type === 'password' ? Boolean(input.value.trim()) : input.value !== (integracoesCarregadas[campo] || '');
+        }).map(campo => [campo, $('config-' + campo).value]));
+        await cliente.solicitar('/config/integracoes', entrada);
+        if (['INSTAGRAM_ACCOUNT_ID', 'INSTAGRAM_ACCESS_TOKEN', 'META_GRAPH_VERSION'].some(campo => Object.hasOwn(entrada, campo))) {
+            perfilInstagram = undefined;
+            $('status-instagram').textContent = 'Configuração alterada. Teste novamente o Instagram.';
+        }
+        perfilFacebook = undefined;
+        $('status-facebook').textContent = 'Configuração alterada. Teste novamente a Página.';
+        $('status-integracoes').textContent = 'Configurações salvas no backend. O .env não foi alterado.';
+        await carregarIntegracoes(); atualizarControlesStory(); renderizarRevisao();
+        await window.MetaConexao?.carregar();
+    } catch (erro) { $('status-integracoes').textContent = erro.message; }
+    finally { for (const campo of camposIntegracoes) if ($('config-' + campo).type === 'password') $('config-' + campo).value = ''; $('salvar-integracoes').disabled = false; }
+}
+
+/** Verifica a Página sem criar qualquer publicação. */
+async function testarFacebook() {
+    $('testar-facebook').disabled = true; perfilFacebook = undefined;
+    try {
+        const resposta = await cliente.solicitar('/facebook/me');
+        if (!resposta.profile?.id) throw new Error('A Página não retornou um ID válido.');
+        perfilFacebook = resposta.profile;
+        $('status-facebook').textContent = `Página: ${perfilFacebook.name || ''} · ID ${perfilFacebook.id}`;
+    } catch (erro) { $('status-facebook').textContent = erro.message; }
+    finally { $('testar-facebook').disabled = false; renderizarRevisao(); }
+}
+
+/**
+ * Restaura o estado das conexões a partir do backend (fonte de verdade) para
+ * que o botão "Publicar agora" não dependa de cliques manuais nem de reload.
+ * Somente leituras: Instagram (/meta/me) e estado do assistente (/meta/conexao).
+ */
+async function restaurarConexoes() {
+    try { await verificarInstagram(); } catch { /* Instagram indisponível; mantém o estado atual. */ }
+    try {
+        const resposta = await cliente.solicitar('/meta/conexao', undefined, { prazo: 8000 });
+        const pagina = resposta?.conexao?.pagina;
+        if (resposta?.conexao?.estado === 'conectado' && pagina?.id) {
+            perfilFacebook = { id: pagina.id, name: pagina.nome };
+            $('status-facebook').textContent = `Página conectada: ${pagina.nome} · ID ${pagina.id}`;
+        }
+    } catch { /* Sem conexão Facebook; o destino Facebook permanece opcional. */ }
+    renderizarRevisao();
+}
+
+/** Exige conexão verificada somente para os destinos escolhidos (regra central). */
+function destinosVerificados() {
+    const alvo = new Set(['Ao menos um destino selecionado', 'Instagram verificado', 'Página Facebook verificada', 'Story Instagram requer conta Business verificada']);
+    return elegibilidadePublicacaoAtual().itens.filter(item => alvo.has(item.texto)).every(item => item.ok);
+}
 let servidorOnline = false;
 let templateRequisitosFixo;
 let agendaEmpresa;
 let temporizadorEmpresa;
 let templatePadrao = { texto: '', aplicarAutomatico: false };
+let templatesBiblioteca = [];
+let templateSelecionadoId = '';
 let anteriores = [];
 let anterioresCursor = null;
 let anteriorSelecionada = null;
 let analiseAtual = null;
 let planoPeriodo = null;
 let selecionadosPeriodo = new Set();
+let ultimoSalvamentoServidor = false;
 
 function aplicarMarca() { document.title = 'Astra Instagram · Estúdio de publicações'; document.documentElement.dataset.aplicativo = 'Astra Instagram'; }
 function elemento(tag, texto, classe) { const el = document.createElement(tag); if (texto !== undefined) el.textContent = texto; if (classe) el.className = classe; return el; }
 function avisar(texto) { const alvo = $('mensagem'); if (!alvo) return; alvo.textContent = texto; clearTimeout(temporizador); temporizador = setTimeout(() => { alvo.textContent = ''; }, 8000); }
 function formatarBytes(bytes) { const v = Number(bytes) || 0; if (v < 1024) return `${v} B`; if (v < 1048576) return `${(v / 1024).toFixed(1)} KB`; return `${(v / 1048576).toFixed(1)} MB`; }
-function registrar(evento, dados = {}) { window.registrarDiagnostico?.('EDITOR', evento, dados); }
+function registrar(evento, dados = {}) { window.registrarDiagnostico?.('EDITOR', evento, dados); window.AstraLogs?.registrar({ modulo: 'EDITOR', acao: evento, ...dados }); }
 function urlPublicaDaMidia(midia) { return IR.urlPublicaHttps(midia?.urlPublica) ? midia.urlPublica : ''; }
 
 // ============================================================
@@ -73,18 +151,84 @@ async function salvar(silencioso = false) {
     try {
         await salvarArmazenamento('conteudos', conteudos);
         try { await salvarArmazenamento('biblioteca-midias', bibliotecaMidias); } catch { /* melhor esforço */ }
-        $('salvamento').textContent = 'Salvo neste navegador · ' + new Date().toLocaleTimeString('pt-BR');
+        const sincronizado = await sincronizarPublicacaoBackend(atual);
+        ultimoSalvamentoServidor = sincronizado;
+        $('salvamento').textContent = sincronizado
+            ? 'Rascunho salvo no servidor · ' + new Date().toLocaleTimeString('pt-BR')
+            : 'Somente neste navegador · sincronização pendente';
         if (!silencioso) avisar('✓ Salvo');
+        registrar('rascunho_salvo', { status: sincronizado ? 'servidor' : 'local', operationId: atual.id });
         return true;
-    } catch { if (!silencioso) avisar('Não foi possível salvar.'); return false; }
+    } catch { if (!silencioso) avisar('Não foi possível salvar.'); registrar('rascunho_salvar_falhou', { nivel: 'ERROR', status: 'falhou', operationId: atual.id }); return false; }
 }
-function marcarAlterado() { $('salvamento').textContent = 'Alterações ainda não salvas'; }
+function marcarAlterado() { if (atual) atual.atualizadoEm = new Date().toISOString(); $('salvamento').textContent = 'Alterações ainda não salvas'; }
+
+/** Remove arquivos locais antes de enviar o rascunho ao backend. */
+function publicacaoParaBackend(publicacao) {
+    const copia = structuredClone(publicacao);
+    copia.atualizadoEm ||= new Date().toISOString();
+    copia.imagens = (copia.imagens || []).map(({ dados, miniatura, ...midia }) => midia);
+    return copia;
+}
+
+/** Sincroniza um rascunho e mantém o IndexedDB apenas como cache/fallback. */
+async function sincronizarPublicacaoBackend(publicacao) {
+    if (!servidorOnline || !publicacao?.id) return false;
+    try {
+        const resposta = await cliente.solicitar('/publicacoes', { publicacao: publicacaoParaBackend(publicacao) }, { prazo: 15000 });
+        publicacao.atualizadoEm = resposta.publicacao?.atualizadoEm || publicacao.atualizadoEm;
+        publicacao.persistencia = 'servidor';
+        return true;
+    } catch (erro) {
+        if (erro.codigo === 'PUBLICACAO_CONFLITO' && erro.publicacao) {
+            publicacao.persistencia = 'conflito';
+            avisar('Existe uma versão mais nova deste rascunho no servidor. Ela não foi sobrescrita.');
+        } else publicacao.persistencia = 'navegador';
+        return false;
+    }
+}
+
+/** Mescla cache local e backend por ID, sem substituir silenciosamente a versão mais nova. */
+async function carregarRascunhosBackend() {
+    try {
+        const resposta = await cliente.solicitar('/publicacoes', undefined, { prazo: 15000 });
+        const locais = new Map(conteudos.map(item => [item.id, item]));
+        const mesclados = [];
+        for (const remotoBruto of resposta.publicacoes || []) {
+            const remoto = Publicacoes.migrarPublicacao(remotoBruto);
+            const local = locais.get(remoto.id);
+            if (!local) { remoto.persistencia = 'servidor'; mesclados.push(remoto); continue; }
+            locais.delete(remoto.id);
+            const localMaisNovo = Date.parse(local.atualizadoEm || local.criadaEm || 0) > Date.parse(remoto.atualizadoEm || remoto.criadaEm || 0);
+            if (localMaisNovo) {
+                mesclados.push(local);
+                await sincronizarPublicacaoBackend(local);
+            } else {
+                const arquivosLocais = new Map((local.imagens || []).map(midia => [midia.id, midia]));
+                remoto.imagens = (remoto.imagens || []).map(midia => ({ ...midia, dados: arquivosLocais.get(midia.id)?.dados || null, miniatura: arquivosLocais.get(midia.id)?.miniatura || null }));
+                remoto.persistencia = 'servidor'; mesclados.push(remoto);
+            }
+        }
+        for (const local of locais.values()) { mesclados.push(local); await sincronizarPublicacaoBackend(local); }
+        if (mesclados.length) {
+            const idAtual = atual?.id;
+            conteudos = mesclados;
+            atual = conteudos.find(item => item.id === idAtual) || conteudos[0];
+            await salvarArmazenamento('conteudos', conteudos);
+        }
+        return true;
+    } catch { for (const item of conteudos) item.persistencia = 'navegador'; return false; }
+}
 
 /** Captura os campos da etapa antes de persistir, inclusive dados recorrentes. */
 function sincronizarFormularioNoEstado() {
     for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'hashtags', 'palavras', 'ideias', 'imagemUrl', 'videoUrl', 'legenda', 'titulo']) if ($(campo)) atual[campo] = $(campo).value;
     for (const [id, campo] of [['site', 'site'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) if ($(id)) atual[campo] = $(id).value;
     if ($('hashtags-padrao')?.value.trim()) atual.hashtags = $('hashtags-padrao').value.trim();
+    atual.publicarStory = $('publicar-story')?.checked === true;
+    atual.publicarFacebookStory = $('publicar-facebook-story')?.checked === true;
+    atual.publicarInstagram = $('publicar-instagram')?.checked !== false;
+    atual.publicarFacebook = $('publicar-facebook')?.checked === true;
     if ($('template-texto')) atual.templateTexto = $('template-texto').value;
     atual.templateAplicarAutomatico = $('template-auto')?.checked === true;
 }
@@ -177,14 +321,17 @@ function trocarConteudo(id) {
 // MÍDIA
 // ============================================================
 
+/** Lê imagens e MP4 locais, normalizando MIME genérico antes do envio validado. */
 async function lerArquivo(arquivo) {
     const imagem = ['image/jpeg', 'image/png', 'image/webp'].includes(arquivo.type);
-    const video = arquivo.type === 'video/mp4';
+    const video = /\.mp4$/i.test(arquivo.name) && ['video/mp4', '', 'application/octet-stream'].includes(arquivo.type);
+    if ((/\.mp4$/i.test(arquivo.name) || String(arquivo.type).startsWith('video/')) && !video) throw new Error(`${arquivo.name}: Reels exigem MIME video/mp4 e extensão .mp4.`);
     if (!imagem && !video) throw new Error(`${arquivo.name}: use JPEG, PNG, WebP ou MP4.`);
-    if (arquivo.size > (video ? 50 : 5) * 1024 * 1024) throw new Error(`${arquivo.name}: excede o tamanho permitido.`);
+    if (video && !/\.mp4$/i.test(arquivo.name)) throw new Error(`${arquivo.name}: Reels exigem extensão .mp4 e MIME video/mp4.`);
+    if (arquivo.size > 256 * 1024 * 1024) throw new Error(`${arquivo.name}: excede o limite de 256 MB.`);
     const dados = await new Promise((resolve, reject) => {
         const leitor = new FileReader();
-        leitor.onload = () => resolve(leitor.result);
+        leitor.onload = () => resolve(video ? String(leitor.result).replace(/^data:[^,]*,/, 'data:video/mp4;base64,') : leitor.result);
         leitor.onerror = () => reject(new Error(`${arquivo.name}: não foi possível ler o arquivo.`));
         leitor.readAsDataURL(arquivo);
     });
@@ -196,10 +343,18 @@ async function lerArquivo(arquivo) {
         visual.onerror = () => reject(new Error(`${arquivo.name}: vídeo inválido.`));
         visual.src = dados;
     });
-    return { id: crypto.randomUUID(), nome: arquivo.name, dados, miniatura: dados, tipo: video ? 'video' : 'imagem', mime: arquivo.type, tamanho: arquivo.size, duracao, status: 'disponível', statusProcessamento: 'concluído', urlPublica: '', statusUpload: 'pendente', tags: [] };
+    return { id: crypto.randomUUID(), nome: arquivo.name, dados, miniatura: dados, tipo: video ? 'video' : 'imagem', mime: video ? 'video/mp4' : arquivo.type, tamanho: arquivo.size, duracao, status: 'disponível', statusProcessamento: 'concluído', urlPublica: '', statusUpload: 'pendente', tags: [] };
 }
 
 function renderizarMidias() {
+    const urls = $('urls-publicas-midias'); urls.replaceChildren();
+    for (const midia of atual.imagens) {
+        const item = elemento('li', `${midia.nome}: `);
+        const url = urlPublicaDaMidia(midia);
+        if (url) { const link = elemento('a', url); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; item.append(link); }
+        else item.append(document.createTextNode(midia.statusUpload === 'enviando' ? 'Enviando…' : 'Aguardando envio'));
+        urls.append(item);
+    }
     const galeria = $('galeria');
     galeria.replaceChildren();
     atual.imagens.forEach((foto, indice) => {
@@ -231,13 +386,13 @@ function renderizarMidias() {
 
 /** Envia uma mídia, sincroniza estado e campo visual (re-localiza pelo ID). */
 async function enviarMidia(midia, botao) {
-    if (midia.tipo !== 'imagem') { avisar('Somente imagens JPEG/PNG/WebP usam o upload público.'); return; }
+    if (midia.tipo === 'video' && !IR.arquivoReelMp4(midia)) { avisar('Reels exigem arquivo .mp4 com MIME video/mp4.'); return; }
     const conteudo = atual;
     const original = botao?.textContent;
     if (botao) { botao.disabled = true; botao.textContent = 'Enviando…'; }
     midia.statusUpload = 'enviando'; renderizarMidias();
     try {
-        const resposta = await cliente.solicitar('/media/upload', { id: midia.id, dados: midia.dados, mime: midia.mime, nome: midia.nome }, { prazo: 60000 });
+        const resposta = await cliente.solicitar('/media/upload', { id: midia.id, dados: midia.dados, mime: midia.mime, nome: midia.nome }, { prazo: 660000 });
         if (typeof resposta?.public_url !== 'string' || !resposta.public_url) throw Object.assign(new Error('O servidor não retornou public_url.'), { codigo: 'MIDIA_UPLOAD_RESPOSTA_INVALIDA' });
         const atualizada = Publicacoes.registrarUrlPublica(conteudo, midia.id, resposta.public_url, resposta);
         if (!atualizada) throw Object.assign(new Error('A mídia enviada não foi encontrada no conteúdo atual.'), { codigo: 'MIDIA_NAO_ENCONTRADA' });
@@ -245,7 +400,7 @@ async function enviarMidia(midia, botao) {
         marcarAlterado();
         if (conteudo === atual) { sincronizarCampos(); renderizarMidias(); renderizarRevisao(); }
         await salvar(true);
-        avisar('✓ Imagem enviada. URL pública preenchida.');
+        avisar(`✓ ${midia.tipo === 'video' ? 'Vídeo MP4' : 'Imagem'} enviado. URL pública preenchida.`);
     } catch (erro) {
         midia.statusUpload = 'pendente'; renderizarMidias();
         registrar('media_upload_failed', { mediaId: midia.id, code: erro.codigo, message: erro.message });
@@ -265,7 +420,7 @@ async function processarArquivos(arquivos) {
     if (!lidas.length) { avisar(falhas.length ? 'Nenhum arquivo válido foi adicionado.' : 'Nenhum arquivo selecionado.'); return; }
     bibliotecaMidias.push(...lidas); bibliotecaMidias = bibliotecaMidias.slice(-200);
     if (acao === 'carrossel') {
-        atual.tipoMidia = 'carrossel'; atual.imagens = [...lidas];
+        atual.tipoMidia = 'carrossel'; atual.imagens = [...atual.imagens, ...lidas];
     } else if (acao === 'distribuir') {
         for (const midia of lidas) {
             const novo = R.criarConteudo();
@@ -278,6 +433,8 @@ async function processarArquivos(arquivos) {
         avisar(`${lidas.length} conteúdo(s) criado(s).`);
     } else {
         for (const midia of lidas) { if (atual.imagens.length >= 10) { avisar('Limite local de 10 mídias por conteúdo.'); break; } atual.imagens.push(midia); }
+        if (lidas.length === 1 && lidas[0].tipo === 'video') atual.tipoMidia = 'reel';
+        else if (atual.imagens.length > 1 && atual.imagens.every(midia => midia.tipo === 'imagem')) atual.tipoMidia = 'carrossel';
     }
     IR.sincronizarUrlsPublicas(atual); atual.estado = 'rascunho';
     marcarAlterado(); sincronizarCampos(); renderizarMidias(); renderizarRevisao(); atualizarSeletorConteudos();
@@ -292,19 +449,84 @@ function sincronizarCampos() {
     $('tipoMidia').value = atual.tipoMidia;
     for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'hashtags', 'palavras', 'ideias', 'imagemUrl', 'videoUrl', 'legenda']) if ($(campo)) $(campo).value = atual[campo] || '';
     if ($('titulo')) $('titulo').value = atual.titulo || '';
-    if ($('template-texto')) $('template-texto').value = atual.templateTexto || templatePadrao.texto || '';
+    if ($('template-texto')) $('template-texto').value = templatePadrao.texto || '';
     if ($('template-auto')) $('template-auto').checked = templatePadrao.aplicarAutomatico === true;
+    if ($('publicar-story')) $('publicar-story').checked = atual.publicarStory === true;
+    $('publicar-facebook-story').checked = atual.publicarFacebookStory === true;
+    if ($('publicar-instagram')) $('publicar-instagram').checked = atual.publicarInstagram !== false;
+    if ($('publicar-facebook')) $('publicar-facebook').checked = atual.publicarFacebook === true;
     if ($('imagemUrl')) Publicacoes.sincronizarUrlPublicaNoCampo($('imagemUrl'), atual);
     $('campo-imagem-url').hidden = atual.tipoMidia === 'reel';
     $('campo-video-url').hidden = atual.tipoMidia !== 'reel';
     $('usar-visao').checked = atual.usarVisao !== false;
     if ($('estado')) $('estado').textContent = Publicacoes.estadoPublicacao(atual);
     atualizarCampoConteudo();
+    atualizarControlesStory();
+}
+
+/**
+ * Habilita Stories apenas para conta Business e mídia individual.
+ * Usa optional chaining para que um elemento ausente nunca aborte a
+ * renderização e deixe o botão de publicar preso no estado anterior.
+ */
+function atualizarControlesStory() {
+    const business = String(perfilInstagram?.account_type || '').toUpperCase() === 'BUSINESS';
+    const carrossel = atual.tipoMidia === 'carrossel';
+    const habilitado = business && !carrossel;
+    if ($('publicar-story')) $('publicar-story').disabled = !habilitado;
+    if ($('periodo-story')) $('periodo-story').disabled = !business;
+    // Story do Facebook é independente do Story do Instagram e do Feed.
+    if ($('publicar-facebook-story')) $('publicar-facebook-story').disabled = !perfilFacebook || carrossel;
+    if ($('facebook-story-explicacao')) $('facebook-story-explicacao').textContent = carrossel ? 'Story Facebook exige uma única imagem ou vídeo.' : perfilFacebook ? 'Destino independente do Feed Facebook e do Instagram.' : 'Conecte e verifique a Página Facebook para selecionar Stories.';
+    if ($('story-explicacao')) $('story-explicacao').textContent = carrossel ? 'Carrossel não é convertido silenciosamente em Stories. Use outro fluxo para vários Stories.' : business ? 'O Story será publicado como destino separado, sem legenda.' : 'Stories exigem uma conta Instagram Business verificada.';
+    if ($('periodo-story-explicacao')) $('periodo-story-explicacao').textContent = business ? 'Cada item terá resultados separados para Feed/Reel e Story.' : 'Stories exigem uma conta Instagram Business verificada.';
 }
 
 function atualizarCampoConteudo() { if ($('conteudo-atual')) $('conteudo-atual').value = atual.id; }
 
-function carregarTemplateNoCampo() { if ($('template-texto')) $('template-texto').value = atual.templateTexto || templatePadrao.texto || ''; if ($('template-status')) $('template-status').textContent = templatePadrao.texto ? 'Template salvo no backend.' : 'Nenhum template salvo.'; }
+function carregarTemplateNoCampo() { if ($('template-texto')) $('template-texto').value = templatePadrao.texto || ''; if ($('template-status')) $('template-status').textContent = templatePadrao.texto ? 'Template salvo no backend.' : 'Nenhum template salvo.'; }
+
+/** Atualiza o seletor da biblioteca sem aplicar conteúdo automaticamente. */
+function renderizarTemplates() {
+    const seletor = $('template-seletor');
+    seletor.replaceChildren(new Option('Selecione…', ''));
+    for (const template of templatesBiblioteca) seletor.append(new Option(template.nome, template.id));
+    seletor.value = templatesBiblioteca.some(item => item.id === templateSelecionadoId) ? templateSelecionadoId : '';
+    $('template-atualizar').disabled = !seletor.value;
+}
+
+function preencherFormularioTemplate(template) {
+    if (!template) return;
+    templateSelecionadoId = template.id;
+    $('template-nome').value = template.nome || '';
+    $('template-texto').value = template.texto || '';
+    $('template-auto').checked = template.aplicarAutomatico === true;
+    for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'palavras', 'ideias']) if (typeof template[campo] === 'string') $(campo).value = template[campo];
+    if (typeof template.hashtagsPublicacao === 'string') $('hashtags').value = template.hashtagsPublicacao;
+    for (const [id, campo] of [['site', 'site'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['hashtags-padrao', 'hashtags'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) $(id).value = template[campo] || '';
+    renderizarTemplates();
+}
+
+function templateDoFormulario() {
+    const ler = id => ($(id)?.value || '').trim();
+    return {
+        id: templateSelecionadoId || null, nome: ler('template-nome') || 'Template sem nome', texto: $('template-texto').value || '',
+        ...Object.fromEntries(['objetivo', 'tema', 'fatos', 'contexto', 'palavras', 'ideias'].map(campo => [campo, $(campo).value || ''])),
+        hashtagsPublicacao: $('hashtags').value || '',
+        hashtags: ler('hashtags-padrao'), site: ler('site'), maps: ler('maps'), linksAdicionais: ler('links-adicionais'),
+        informacoesAdicionais: ler('informacoes-fixas'), chamadasFixas: ler('chamadas-fixas'), aplicarAutomatico: $('template-auto').checked === true
+    };
+}
+
+async function carregarBibliotecaTemplates() {
+    try {
+        const resposta = await cliente.solicitar('/empresa/templates', undefined, { prazo: 10000 });
+        templatesBiblioteca = resposta.templates || [];
+        const automatico = templatesBiblioteca.find(item => item.aplicarAutomatico);
+        if (automatico) templatePadrao = { texto: automatico.texto || '', aplicarAutomatico: true };
+        renderizarTemplates();
+    } catch { $('template-status').textContent = 'Biblioteca de templates indisponível; campos atuais preservados.'; }
+}
 
 // ============================================================
 // DADOS RECORRENTES DA EMPRESA
@@ -326,7 +548,7 @@ function preencherCamposRecorrentes() {
         const el = $(campo);
         if (!el) continue;
         const chave = campo.replace(/-([a-z])/g, (_, letra) => letra.toUpperCase());
-        el.value = atual[chave] || recorrentes[chave] || '';
+        el.value = recorrentes[chave] || '';
     }
     $('recorrentes-status').textContent = `Dados recorrentes salvos no backend${recorrentes.hashtagsPadrao ? ' (hashtags incluídas)' : ''}.`;
 }
@@ -362,15 +584,35 @@ async function salvarRecorrentesEmpresa() {
 }
 
 async function salvarTemplatePadrao() {
-    templatePadrao = { texto: $('template-texto').value || '', aplicarAutomatico: $('template-auto').checked === true };
-    atual.templateTexto = templatePadrao.texto; atual.templateAplicarAutomatico = templatePadrao.aplicarAutomatico;
-    try { await cliente.solicitar('/empresa/template-padrao', { templatePadrao }, { prazo: 15000 }); avisar('Template salvo.'); }
-    catch (erro) { avisar(`Template mantido localmente; o servidor não confirmou: ${erro.message}`); }
-    marcarAlterado(); renderizarRevisao(); carregarTemplateNoCampo();
+    const template = templateDoFormulario();
+    try {
+        const resposta = await cliente.solicitar('/empresa/templates', { novo: true, template: { ...template, id: null } }, { prazo: 15000 });
+        templatesBiblioteca = resposta.templates || [];
+        preencherFormularioTemplate(resposta.template);
+        avisar('Template salvo como novo no backend.');
+    } catch (erro) { avisar(`O servidor não confirmou o template: ${erro.message}`); }
+}
+
+async function atualizarTemplateSelecionado() {
+    if (!templateSelecionadoId) { avisar('Selecione um template para atualizar.'); return; }
+    try {
+        const resposta = await cliente.solicitar('/empresa/templates', { novo: false, template: templateDoFormulario() }, { prazo: 15000 });
+        templatesBiblioteca = resposta.templates || [];
+        preencherFormularioTemplate(resposta.template);
+        avisar('Template selecionado atualizado no backend.');
+    } catch (erro) { avisar(`Não foi possível atualizar: ${erro.message}`); }
 }
 
 function aplicarTemplateAtual() {
-    atual.templateTexto = $('template-texto').value || '';
+    const template = templateDoFormulario();
+    for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'palavras', 'ideias']) atual[campo] = template[campo];
+    atual.templateTexto = template.texto && !atual.legenda.includes(template.texto.trim()) ? template.texto : '';
+    const hashtagsPresentes = new Set(R.hashtags(atual.legenda).map(tag => tag.toLowerCase()));
+    atual.hashtags = [...new Set(`${template.hashtagsPublicacao || ''} ${template.hashtags || ''}`.split(/\s+/).filter(tag => tag && !hashtagsPresentes.has(tag.toLowerCase())))].join(' ');
+    atual.site = template.site; atual.maps = template.maps; atual.linksAdicionais = template.linksAdicionais;
+    atual.informacoesAdicionais = template.informacoesAdicionais; atual.chamadasFixas = template.chamadasFixas;
+    atual.incluir = { ...atual.incluir, site: Boolean(template.site), maps: Boolean(template.maps) };
+    $('hashtags').value = atual.hashtags;
     marcarAlterado(); renderizarRevisao(); avisar('Template aplicado à publicação atual.');
 }
 
@@ -379,6 +621,8 @@ function aplicarTemplateAtual() {
 // ============================================================
 
 function renderizarRevisao() {
+    atualizarControlesStory();
+    $('conexoes-rodape').textContent = `Servidor: ${servidorOnline ? 'online' : 'indisponível'} · Instagram: ${perfilInstagram ? 'verificado' : 'não verificado'} · Facebook: ${perfilFacebook ? 'Página verificada' : 'não conectado'}`;
     const previas = $('previas');
     previas.replaceChildren();
     const cartao = elemento('div', undefined, 'previa');
@@ -404,21 +648,24 @@ function renderizarRevisao() {
         revisaoIdeias.append(label);
     }
 
-    const validacoes = R.validar(atual, Date.now(), { exigirMidia: false });
-    validacoes.push({ ok: IR.midiasPublicasProntas(atual), texto: 'URL HTTPS pública da mídia pronta para publicação' });
+    const validacoes = validacoesDaRevisao();
     $('validacoes').replaceChildren(...validacoes.map(item => elemento('li', `${item.ok ? '✓' : '○'} ${item.texto}`, item.ok ? 'ok' : 'pendente')));
     const pronto = validacoes.every(item => item.ok);
     $('aprovar').disabled = !pronto || atual.estado === 'confirmado';
     $('decisao-publicacao').hidden = atual.estado !== 'confirmado';
-    $('publicar-agora-revisao').disabled = enviandoPublicacao || !perfilInstagram || !Publicacoes.podeIniciarPublicacao(atual);
     renderizarValidacoesPublicacao(pronto);
 }
 
 function atualizarChecklist() {
-    const validacoes = R.validar(atual, Date.now(), { exigirMidia: false });
-    validacoes.push({ ok: IR.midiasPublicasProntas(atual), texto: 'URL HTTPS pública da mídia pronta para publicação' });
+    const validacoes = validacoesDaRevisao();
     $('validacoes').replaceChildren(...validacoes.map(item => elemento('li', `${item.ok ? '✓' : '○'} ${item.texto}`, item.ok ? 'ok' : 'pendente')));
     $('aprovar').disabled = !validacoes.every(item => item.ok) || atual.estado === 'confirmado';
+    renderizarValidacoesPublicacao();
+}
+
+/** Reúne as validações visíveis que bloqueiam a aprovação editorial. */
+function validacoesDaRevisao() {
+    return IR.validarInstagram(atual, R);
 }
 
 /** Marca a revisão humana de todas as ideias sem exigir o restante do checklist. */
@@ -426,19 +673,27 @@ function marcarRevisaoHumana() {
     const ideias = R.linhas(atual.ideias);
     atual.revisoes = [...new Set([...(atual.revisoes || []), ...ideias])];
     marcarAlterado(); renderizarRevisao(); salvar(true);
+    registrar('revisao_humana_marcada', { ideias: ideias.length, operationId: atual.id });
     avisar(ideias.length ? 'Revisão humana marcada.' : 'Nenhuma ideia obrigatória para revisar.');
 }
 
-function renderizarValidacoesPublicacao(prontoConteudo) {
-    const itens = IR.validarInstagram(atual, R);
+/** Usa a mesma decisão no checklist, nos botões e na abertura da confirmação. */
+function elegibilidadePublicacaoAtual() {
+    return IR.avaliarPublicacaoImediata(atual, R, { servidorOnline, instagramVerificado: Boolean(perfilInstagram), facebookVerificado: Boolean(perfilFacebook), contaInstagram: perfilInstagram?.account_type, enviando: enviandoPublicacao });
+}
+
+function renderizarValidacoesPublicacao() {
+    const avaliacao = elegibilidadePublicacaoAtual();
+    const itens = avaliacao.itens;
     $('validacoes-publicacao').replaceChildren(...itens.map(item => elemento('li', `${item.ok ? '✓' : '○'} ${item.texto}`, item.ok ? 'ok' : 'pendente')));
-    const pode = prontoConteudo && itens.every(item => item.ok) && Boolean(perfilInstagram) && atual.estado === 'confirmado' && Publicacoes.podeIniciarPublicacao(atual);
-    $('preparar-publicacao').disabled = enviandoPublicacao || !pode;
+    $('preparar-publicacao').disabled = !avaliacao.podePublicar;
+    $('publicar-agora-revisao').disabled = !avaliacao.podePublicar;
+    if (!avaliacao.podePublicar) { $('resultado-publicacao').textContent = avaliacao.motivos.join(' · '); return; }
     $('resultado-publicacao').textContent = atual.statusPublicacao === 'falhou'
         ? `${atual.erroPublicacao || 'A tentativa falhou.'} Você pode corrigir o conteúdo e tentar novamente.`
         : atual.publicacaoReal?.estado === 'publicado'
             ? `Publicada · ID ${atual.publicacaoReal.idPublicado}`
-            : perfilInstagram ? 'Conexão verificada. A publicação só começa após clicar em “Publicar agora”.' : 'Use "Testar Instagram" antes de publicar.';
+            : destinosVerificados() ? 'Destinos verificados. A publicação só começa após sua confirmação.' : 'Teste a conexão dos destinos selecionados: Instagram e/ou Página do Facebook.';
 }
 
 // ============================================================
@@ -475,18 +730,61 @@ async function carregarModelos(atualizar = false) {
     finally { carregandoModelos = false; $('atualizar-modelos').disabled = false; $('modelo-astra').disabled = !modelosDisponiveis.length; }
 }
 
+/** Prepara uma imagem ou seis quadros do MP4 para o modelo de visão. */
+async function prepararMidiaParaVisao(conteudo) {
+    const midia = conteudo.imagens[0];
+    const video = midia?.tipo === 'video' || conteudo.tipoMidia === 'reel';
+    const origem = midia?.dados || (video ? conteudo.videoUrl : conteudo.imagemUrl);
+    if (!video || !origem) return { imagem: origem || undefined, contexto: '' };
+    const visual = document.createElement('video');
+    visual.muted = true; visual.preload = 'auto'; visual.crossOrigin = 'anonymous';
+    /** Aguarda a decodificação com prazo e remove os eventos ao terminar. */
+    function aguardar(evento, iniciar) {
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => terminar(new Error('O vídeo demorou demais para decodificar. Tente um MP4 compatível com o navegador.')), 20000);
+            const sucesso = () => terminar();
+            const falha = () => terminar(new Error('Não foi possível ler os quadros do MP4. Selecione o arquivo local; URLs externas precisam permitir acesso pelo navegador.'));
+            function terminar(erro) {
+                clearTimeout(timer); visual.removeEventListener(evento, sucesso); visual.removeEventListener('error', falha);
+                if (erro) reject(erro); else resolve();
+            }
+            visual.addEventListener(evento, sucesso); visual.addEventListener('error', falha);
+            try { iniciar(); } catch (erro) { terminar(erro); }
+        });
+    }
+    try {
+        await aguardar('loadeddata', () => { visual.src = origem; });
+        if (!Number.isFinite(visual.duration) || visual.duration <= 0 || !visual.videoWidth || !visual.videoHeight) throw new Error('O MP4 não possui duração ou quadros válidos.');
+        const tela = document.createElement('canvas'); tela.width = 1440; tela.height = 600;
+        const desenho = tela.getContext('2d');
+        if (!desenho) throw new Error('O navegador não conseguiu preparar os quadros do vídeo.');
+        desenho.fillStyle = '#000'; desenho.fillRect(0, 0, tela.width, tela.height);
+        const tempos = [];
+        for (let i = 0; i < 6; i++) {
+            const tempo = visual.duration * (i + 0.5) / 6;
+            await aguardar('seeked', () => { visual.currentTime = tempo; });
+            const escala = Math.min(480 / visual.videoWidth, 270 / visual.videoHeight);
+            const largura = visual.videoWidth * escala, altura = visual.videoHeight * escala;
+            const x = (i % 3) * 480, y = Math.floor(i / 3) * 300;
+            desenho.drawImage(visual, x + (480 - largura) / 2, y + (270 - altura) / 2, largura, altura);
+            desenho.fillStyle = '#fff'; desenho.font = '18px sans-serif'; desenho.fillText(`${tempo.toFixed(1)} s`, x + 10, y + 290);
+            tempos.push(tempo.toFixed(1));
+        }
+        return { imagem: tela.toDataURL('image/jpeg', 0.8), contexto: `A imagem contém seis quadros amostrados de um vídeo de ${visual.duration.toFixed(1)} segundos, em ordem da esquerda para a direita, de cima para baixo (${tempos.join(', ')} s). Analise somente o que está visível nesses quadros. O áudio não foi fornecido. Não infira falas, sons ou ações entre os quadros.` };
+    } finally { visual.pause(); visual.removeAttribute('src'); visual.load(); }
+}
+
 async function gerarLegenda(reescrever) {
     const modelo = modelosDisponiveis.find(m => m.id === $('modelo-astra').value);
     if (!modelo) { avisar('Selecione um modelo válido.'); return; }
     let prompt;
     try { prompt = IR.montarPrompt(atual, reescrever, Boolean(modelo.vision)); } catch (erro) { avisar(erro.message); return; }
-    const disponivel = atual.imagens[0]?.dados || (atual.tipoMidia !== 'reel' ? atual.imagemUrl : '');
-    const imagem = atual.usarVisao !== false && modelo.vision ? disponivel : undefined;
     atual.modeloAstra = modelo.id;
     const botao = reescrever ? $('reescrever-legenda') : $('gerar-legenda');
     const original = botao.textContent; botao.disabled = true; botao.textContent = 'Astra escrevendo…';
     try {
-        const resposta = await cliente.solicitar('/astra/generate', { prompt, model: modelo.id, ...(imagem ? { imagem } : {}) }, { prazo: 120000 });
+        const visual = atual.usarVisao !== false && modelo.vision ? await prepararMidiaParaVisao(atual) : {};
+        const resposta = await cliente.solicitar('/astra/generate', { prompt: [prompt, visual.contexto].filter(Boolean).join('\n\n'), model: modelo.id, ...(visual.imagem ? { imagem: visual.imagem } : {}) }, { prazo: 120000 });
         const texto = resposta.astra?.text;
         if (typeof texto !== 'string' || !texto.trim()) throw new Error('Astra não retornou texto.');
         atual.legenda = texto; atual.estado = 'rascunho'; $('legenda').value = texto;
@@ -497,18 +795,18 @@ async function gerarLegenda(reescrever) {
 
 async function analisarMidia() {
     const modelo = modelosDisponiveis.find(m => m.id === $('modelo-astra').value);
-    const imagem = atual.imagens[0]?.dados || (atual.tipoMidia !== 'reel' ? atual.imagemUrl : '');
-    if (!imagem || !modelo?.vision) { avisar('Selecione uma imagem e um modelo com visão.'); return; }
+    if (!(atual.imagens[0]?.dados || atual.videoUrl || atual.imagemUrl) || !modelo?.vision) { avisar('Selecione uma imagem ou MP4 e um modelo com visão.'); return; }
     const botao = $('analisar-midia'); botao.disabled = true; botao.textContent = 'Analisando…';
     try {
-        const resposta = await cliente.solicitar('/astra/generate', { model: modelo.id, imagem, prompt: 'Analise a mídia e retorne SOMENTE JSON {"fatos":["..."],"texto":["..."]}. Separe fatos de OCR. Não invente dados.' }, { prazo: 120000 });
+        const visual = await prepararMidiaParaVisao(atual);
+        const resposta = await cliente.solicitar('/astra/generate', { model: modelo.id, imagem: visual.imagem, prompt: 'Analise a mídia e retorne SOMENTE JSON {"fatos":["..."],"texto":["..."]}. Separe fatos de OCR. Não invente dados.\n' + visual.contexto }, { prazo: 120000 });
         const bruto = resposta.astra?.text?.match(/\{[\s\S]*\}/)?.[0];
         const dados = bruto ? JSON.parse(bruto) : null;
         if (!dados || !Array.isArray(dados.fatos) || !Array.isArray(dados.texto)) throw new Error('Formato inesperado.');
         atual.fatosIa = dados.fatos.filter(i => typeof i === 'string').join('\n');
         atual.textoMidia = dados.texto.filter(i => typeof i === 'string').join('\n');
         $('fatosIa').value = atual.fatosIa; $('textoMidia').value = atual.textoMidia;
-        marcarAlterado(); renderizarRevisao(); avisar('Análise concluída.');
+        marcarAlterado(); renderizarRevisao(); avisar(visual.contexto ? 'Análise de 6 quadros do MP4 concluída, sem áudio. Revise os fatos extraídos.' : 'Análise concluída.');
     } catch (erro) { avisar(`Não foi possível analisar: ${erro.message}`); }
     finally { botao.disabled = false; botao.textContent = 'Analisar mídia com IA'; }
 }
@@ -523,6 +821,7 @@ async function verificarServidor() {
         const dados = await cliente.solicitar('/health');
         if (dados.status !== 'ok') throw new Error('O servidor não confirmou seu estado.');
         servidorOnline = true;
+        if (dados.instagramConfigured && !perfilInstagram) await verificarInstagram();
         $('status-servidor').textContent = 'Servidor online';
         $('detalhes-servidor').textContent = `Instagram: ${dados.instagramConfigured ? 'configurado' : 'não configurado'} · IA: ${dados.aiConfigured ? 'configurada' : 'não'} · Mídia: ${dados.mediaStorageConfigured ? 'pronta' : 'não'} · ${dados.timezone}`;
     } catch (erro) {
@@ -541,13 +840,13 @@ async function verificarInstagram() {
         perfilInstagram = { ...dados.profile, destinoId: dados.publishingAccountId || dados.profile.id };
         $('status-instagram').textContent = `Instagram conectado${perfilInstagram.username ? ' · @' + perfilInstagram.username : ''} · ID ${perfilInstagram.id}`;
     } catch (erro) { $('status-instagram').textContent = erro.message; }
-    finally { $('testar-instagram').disabled = false; renderizarRevisao(); }
+    finally { $('testar-instagram').disabled = false; atualizarControlesStory(); renderizarRevisao(); }
 }
 
 function montarEntradaPublicacao() {
-    if (atual.tipoMidia === 'carrossel') return { formato: 'carrossel', itens: atual.imagens.map(item => ({ tipo: item.tipo, url: urlPublicaDaMidia(item) })), caption: R.compor(atual) };
-    if (atual.tipoMidia === 'reel') return { formato: 'reel', videoUrl: atual.videoUrl.trim(), caption: R.compor(atual) };
-    return { formato: 'imagem', imageUrl: atual.imagemUrl.trim(), caption: R.compor(atual) };
+    if (atual.tipoMidia === 'carrossel') return { formato: 'carrossel', itens: atual.imagens.map(item => ({ tipo: item.tipo, url: urlPublicaDaMidia(item) })), caption: R.compor(atual), publicarStory: false };
+    if (atual.tipoMidia === 'reel') return { formato: 'reel', videoUrl: atual.videoUrl.trim(), mediaMime: 'video/mp4', caption: R.compor(atual), publicarStory: atual.publicarStory === true };
+    return { formato: 'imagem', imageUrl: atual.imagemUrl.trim(), caption: R.compor(atual), publicarStory: atual.publicarStory === true };
 }
 
 function renderizarStatusPublicacao() {
@@ -556,6 +855,10 @@ function renderizarStatusPublicacao() {
     const estado = Publicacoes.statusPublicacaoVisual(atual);
     alvo.className = estado.classe;
     alvo.textContent = `STATUS DA PUBLICAÇÃO: ${estado.texto}`;
+    const resultados = atual.resultadosPublicacao || {};
+    for (const [destino, resultado] of Object.entries(resultados)) {
+        alvo.append(document.createElement('br'), document.createTextNode(`${({ facebook: 'Feed Facebook', facebookStory: 'Story Facebook', story: 'Story Instagram', feed: 'Feed Instagram' })[destino] || destino}: ${resultado.estado}${resultado.idPublicado ? ` · ID ${resultado.idPublicado}` : ''}`));
+    }
     if (atual.permalink) {
         const link = elemento('a', 'Abrir no Instagram', 'nota');
         link.href = atual.permalink; link.target = '_blank'; link.rel = 'noopener';
@@ -566,13 +869,15 @@ function renderizarStatusPublicacao() {
 function prepararPublicacao() {
     if (atual.statusPublicacao === 'publicado') { avisar('Esta publicação já foi enviada ao Instagram.'); return; }
     if (atual.statusPublicacao === 'publicando' || enviandoPublicacao) { avisar('Já existe uma tentativa em andamento.'); return; }
-    if (!perfilInstagram) { avisar('Teste a conexão do Instagram antes de publicar.'); return; }
-    if (atual.estado !== 'confirmado' || IR.validarInstagram(atual, R).some(i => !i.ok)) { avisar('Confirme o conteúdo na Revisão antes de publicar.'); return; }
+    const avaliacao = elegibilidadePublicacaoAtual();
+    if (!avaliacao.podePublicar) { avisar(avaliacao.motivos.join(' · ')); renderizarRevisao(); return; }
     const entrada = montarEntradaPublicacao();
+    entrada.publicarInstagram = atual.publicarInstagram !== false;
+    entrada.publicarFacebook = atual.publicarFacebook === true;
+    entrada.publicarFacebookStory = atual.publicarFacebookStory === true;
+    if (entrada.publicarFacebook || entrada.publicarFacebookStory) entrada.facebookPageId = perfilFacebook.id;
     confirmacaoAtual = { id: atual.id, assinatura: IR.assinaturaConteudo(atual), entrada, conta: perfilInstagram?.destinoId || null };
-    $('conta-confirmacao').textContent = perfilInstagram
-        ? `Perfil: ${perfilInstagram.username ? '@' + perfilInstagram.username : perfilInstagram.id}.`
-        : 'Perfil não verificado nesta sessão; o backend usará a conta configurada.';
+    $('conta-confirmacao').textContent = [entrada.publicarInstagram ? `Feed Instagram: ${perfilInstagram.username || perfilInstagram.id}` : '', entrada.publicarStory ? `Story Instagram: ${perfilInstagram.username || perfilInstagram.id}` : '', entrada.publicarFacebook ? `Feed Facebook: ${perfilFacebook.name || perfilFacebook.id}` : '', entrada.publicarFacebookStory ? `Story Facebook: ${perfilFacebook.name || perfilFacebook.id}` : ''].filter(Boolean).join(' · ');
     $('midia-confirmacao').textContent = entrada.formato === 'carrossel' ? `${entrada.itens.length} itens` : (entrada.videoUrl || entrada.imageUrl);
     $('legenda-confirmacao').textContent = entrada.caption;
     $('autorizo-publicacao').checked = false; $('confirmar-publicacao').disabled = true;
@@ -585,6 +890,7 @@ async function confirmarPublicacao() {
     if (!confirmacao || enviandoPublicacao || !$('autorizo-publicacao').checked) return;
     if (atual.id !== confirmacao.id || IR.assinaturaConteudo(atual) !== confirmacao.assinatura) { $('confirmacao-publicacao').close(); confirmacaoAtual = undefined; avisar('O conteúdo mudou. Revise novamente.'); return; }
     enviandoPublicacao = true;
+    registrar('publicar_agora_confirmado', { operationId: atual.id, destinos: [atual.publicarInstagram !== false && 'instagram:feed', atual.publicarStory && 'instagram:story', atual.publicarFacebook && 'facebook:feed', atual.publicarFacebookStory && 'facebook:story'].filter(Boolean) });
     $('confirmar-publicacao').disabled = true; $('confirmar-publicacao').textContent = 'Publicando…'; $('cancelar-publicacao').disabled = true;
     const tentativa = Publicacoes.iniciarTentativa(atual, crypto.randomUUID());
     if (!tentativa) { enviandoPublicacao = false; return; }
@@ -597,16 +903,21 @@ async function confirmarPublicacao() {
     }
     $('confirmacao-publicacao').close(); confirmacaoAtual = undefined;
     try {
-        const resposta = await cliente.solicitar('/instagram/publish', { ...confirmacao.entrada, publicationId: atual.id }, { prazo: 270000, id: tentativa.tentativaId });
+        const resposta = await cliente.solicitar('/instagram/publish', { ...confirmacao.entrada, publicationId: atual.id, containerId: atual.containerPublicacaoId || undefined, storyContainerId: atual.containerStoryId || undefined }, { prazo: 270000, id: tentativa.tentativaId });
         if (resposta.success !== true || !resposta.published?.id) throw new Error(resposta.error || 'O servidor não confirmou a publicação.');
+        atual.resultadosPublicacao = resposta.resultadosPublicacao || { feed: { estado: 'confirmada', idPublicado: resposta.published.id } };
         tentativa.estado = 'publicado'; tentativa.idPublicado = resposta.published.id; tentativa.finalizadoEm = new Date().toISOString();
-        Publicacoes.registrarPublicacao(atual, { mediaId: resposta.media_id || resposta.published.id, permalink: resposta.permalink, publicadoEm: resposta.published_at });
-        avisar('✓ Publicado no Instagram. Publicação concluída com sucesso. Métricas ainda não disponíveis.');
+        Publicacoes.registrarPublicacao(atual, { mediaId: resposta.media_id || resposta.published.id, containerId: resposta.containerId, permalink: resposta.permalink, publicadoEm: resposta.published_at });
+        registrar('publicacao_concluida', { status: Object.keys(atual.resultadosPublicacao || {}).length > 1 ? 'sucesso_parcial' : 'sucesso', operationId: atual.id, contexto: { resultados: atual.resultadosPublicacao || null } });
+        avisar('✓ Publicação confirmada nos destinos selecionados.');
         renderizarMetricasResumo();
     } catch (erro) {
+        if (erro.resultadosPublicacao) atual.resultadosPublicacao = erro.resultadosPublicacao;
+        if (erro.destinoPublicacao === 'story' && erro.containerId) atual.containerStoryId = erro.containerId;
         tentativa.estado = 'incerto'; tentativa.mensagem = erro.message;
-        Publicacoes.registrarPublicacao(atual, { erro: erro.message });
-        avisar(`✗ Não foi possível publicar no Instagram: ${erro.message}`);
+        Publicacoes.registrarPublicacao(atual, { erro: erro.message, containerId: erro.destinoPublicacao === 'story' ? null : erro.containerId, estadoContainer: erro.containerStatus });
+        registrar('publicacao_falhou', { nivel: 'ERROR', status: 'falhou', operationId: atual.id, codigo: erro.codigo, destino: erro.destinoPublicacao || null, mensagem: erro.message, contexto: { resultados: erro.resultadosPublicacao || null } });
+        avisar(`✗ A publicação não foi concluída em todos os destinos: ${erro.message}`);
     }
     finally {
         enviandoPublicacao = false; $('cancelar-publicacao').disabled = false;
@@ -643,8 +954,7 @@ function renderizarAnteriores() {
     const lista = $('anteriores-lista');
     lista.replaceChildren();
     anteriores.forEach(item => {
-        const cartao = elemento('button', undefined, 'cartao-anterior');
-        cartao.type = 'button';
+        const cartao = elemento('article', undefined, 'cartao-anterior');
         const moldura = elemento('span', 'Carregando…', 'miniatura-anterior');
         const fontes = Array.isArray(item.miniaturas) && item.miniaturas.length ? item.miniaturas : (item.miniatura ? [item.miniatura] : []);
         if (fontes.length) {
@@ -659,7 +969,10 @@ function renderizarAnteriores() {
         info.append(elemento('strong', `${item.formato || 'publicação'}`), elemento('small', item.publicadoEm ? new Date(item.publicadoEm).toLocaleString('pt-BR') : 'data n/i'));
         info.append(elemento('p', trecho(item.legenda) || '(sem legenda)', 'nota'));
         cartao.append(info);
-        cartao.onclick = () => selecionarAnterior(item);
+        const acoes = elemento('div', undefined, 'acoes');
+        const detalhes = elemento('button', 'Ver detalhes'); detalhes.type = 'button'; detalhes.onclick = () => selecionarAnterior(item);
+        const rascunho = elemento('button', 'Usar como exemplo e criar rascunho'); rascunho.type = 'button'; rascunho.onclick = () => usarComoBase(item);
+        acoes.append(detalhes, rascunho); cartao.append(acoes);
         lista.append(cartao);
     });
 }
@@ -673,7 +986,7 @@ function selecionarAnterior(item) {
     if (item.permalink) { const link = elemento('a', 'Abrir no Instagram', 'nota'); link.href = item.permalink; link.target = '_blank'; link.rel = 'noopener'; bloco.append(link); }
     bloco.append(elemento('p', trecho(item.legenda, 400) || '(sem legenda)', 'texto-final'));
     const acoes = elemento('div', undefined, 'acoes');
-    const base = elemento('button', 'Usar como base'); base.type = 'button'; base.onclick = usarComoBase;
+    const base = elemento('button', 'Usar como exemplo e criar rascunho'); base.type = 'button'; base.onclick = () => usarComoBase(item);
     const copiar = elemento('button', 'Copiar legenda'); copiar.type = 'button'; copiar.onclick = () => { atual.legenda = item.legenda || ''; if ($('legenda')) $('legenda').value = atual.legenda; marcarAlterado(); renderizarRevisao(); avisar('Legenda copiada para a publicação atual.'); };
     const metricas = elemento('button', 'Atualizar métricas'); metricas.type = 'button'; metricas.onclick = () => atualizarMetricas([item]);
     acoes.append(base, copiar, metricas);
@@ -682,17 +995,22 @@ function selecionarAnterior(item) {
 }
 
 /** Cria uma nova publicação local a partir de uma anterior; nunca altera o original. */
-function usarComoBase() {
-    if (!anteriorSelecionada) return;
+async function usarComoBase(origem = anteriorSelecionada) {
+    if (!origem) return;
     const nova = aplicarRecorrentesEm(R.criarConteudo());
-    nova.titulo = `Base: ${trecho(anteriorSelecionada.legenda, 40) || anteriorSelecionada.id}`;
-    nova.legenda = anteriorSelecionada.legenda || '';
-    nova.tipoMidia = anteriorSelecionada.formato === 'reel' ? 'reel' : anteriorSelecionada.formato === 'carrossel' ? 'carrossel' : 'imagem';
+    nova.titulo = `Exemplo: ${trecho(origem.legenda, 40) || origem.id}`;
+    nova.legenda = origem.legenda || '';
+    nova.contexto = `Rascunho criado a partir da publicação histórica ${origem.id}.`;
+    nova.tipoMidia = origem.formato === 'reel' ? 'reel' : origem.formato === 'carrossel' ? 'carrossel' : 'imagem';
     if (templatePadrao.aplicarAutomatico && !nova.templateTexto) nova.templateTexto = templatePadrao.texto;
-    nova.referenciaImportada = anteriorSelecionada.id;
+    nova.referenciaImportada = origem.id;
+    nova.referenciaVisual = origem.miniatura || null;
+    nova.imagens = []; nova.imagemUrl = ''; nova.videoUrl = '';
+    nova.statusPublicacao = 'nao_publicada'; nova.instagramMediaId = null; nova.publicacaoReal = null; nova.resultadosPublicacao = {};
     conteudos.push(nova); atual = nova;
     marcarAlterado(); sincronizarCampos(); renderizarMidias(); renderizarRevisao(); atualizarSeletorConteudos(); abrirAba('midia');
-    avisar('Nova publicação criada a partir da anterior. O post original não foi alterado.');
+    const salvo = await salvar(true);
+    avisar(salvo && ultimoSalvamentoServidor ? 'Rascunho criado e salvo no backend. A miniatura histórica é apenas referência; selecione a mídia original.' : 'Rascunho criado somente neste navegador. O post original não foi alterado.');
 }
 
 // ============================================================
@@ -838,13 +1156,16 @@ function lerConfigPeriodo() {
         nivelVariacao: $('periodo-nivel').value,
         permitirReutilizacao: $('periodo-reutilizar').checked === true,
         tipos: ['imagem', 'video', 'carrossel'],
-        destinos: ['Instagram'],
+        destinos: [...($('periodo-instagram').checked ? ['Instagram Feed', ...($('periodo-story').checked ? ['Instagram Story'] : [])] : []), ...($('periodo-facebook').checked ? ['Facebook Page'] : [])],
+        facebookPageId: $('periodo-facebook').checked ? perfilFacebook?.id || null : null,
         atraso: 'reagendar', toleranciaMinutos: 30
     };
 }
 
 async function gerarPeriodo() {
     const config = lerConfigPeriodo();
+    if (!config.destinos.length) { avisar('Escolha ao menos um destino para a agenda.'); return; }
+    if (config.destinos.includes('Facebook Page') && !config.facebookPageId) { avisar('Conecte e selecione a Página do Facebook antes de gerar o plano.'); return; }
     const melhoresHorarios = (analiseAtual?.melhoresHorarios || []).length ? analiseAtual.melhoresHorarios : (await analisarHorarios())?.melhoresHorarios || [];
     const plano = PS.planejarPeriodo(config, ctxMidias(), { melhoresHorarios });
     plano.sincronizacao = { estado: 'rascunho_local', confirmadoEm: null, erro: null };
@@ -865,11 +1186,23 @@ function ctxMidias() { return Fluxo.prepararMidiasParaAgenda(globalThis.AstraCon
 function renderizarPeriodoPrevia() {
     const container = $('periodo-previa'); container.replaceChildren();
     if (!planoPeriodo) return;
+    for (const bloqueio of planoPeriodo.inelegiveis || []) container.append(elemento('p', `Não elegível para agendamento orgânico: ${bloqueio.motivo}`, 'pendente'));
     for (const item of planoPeriodo.itens) {
         const linha = elemento('div', undefined, 'agenda-item');
         const sincronizacao = planoPeriodo.sincronizacao?.estado ? ` · ${planoPeriodo.sincronizacao.estado.replaceAll('_', ' ')}` : '';
         linha.append(elemento('div', `${item.data} ${item.hora} · ${item.tipo} · ${item.status} · v${item.versao}${item.variarTexto ? ' · variação ' + item.nivelVariacao : ''}${sincronizacao}`));
         linha.append(elemento('p', trecho(item.legenda) || '(legenda vazia)', 'nota'));
+        linha.append(elemento('p', `Destinos: ${(item.destinos || []).join(', ')}`, 'nota'));
+        const story = document.createElement('input'); story.type = 'checkbox'; story.checked = item.destinos?.includes('Instagram Story');
+        story.disabled = !item.destinos?.includes('Instagram Feed') || item.tipo === 'carrossel' || String(perfilInstagram?.account_type || '').toUpperCase() !== 'BUSINESS' || planoPeriodo.sincronizacao?.estado === 'confirmado_servidor';
+        story.onchange = async () => {
+            item.destinos = story.checked ? [...new Set([...(item.destinos || []), 'Instagram Story'])] : (item.destinos || []).filter(destino => destino !== 'Instagram Story');
+            item.approvalSignature = null; item.status = 'rascunho'; planoPeriodo.status = 'rascunho'; planoPeriodo.sincronizacao = { estado: 'rascunho_local', erro: null };
+            await persistirPlanoPeriodo(); renderizarPeriodoPrevia();
+        };
+        const rotuloStory = elemento('label', undefined, 'check'); rotuloStory.append(story, document.createTextNode(item.tipo === 'carrossel' ? ' Story indisponível para carrossel' : ' Publicar também no Story'));
+        linha.append(rotuloStory);
+        for (const [destino, resultado] of Object.entries(item.resultados || {})) linha.append(elemento('p', `${destino}: ${resultado.estado}${resultado.idPublicado ? ` · ID ${resultado.idPublicado}` : ''}`, 'nota'));
         container.append(linha);
     }
 }
@@ -909,7 +1242,7 @@ async function confirmarPeriodo() {
         await persistirPlanoPeriodo();
         $('periodo-status').textContent = `Falha ao confirmar no servidor: ${erro.message} O rascunho foi preservado.`;
         $('periodo-status').className = 'pendente'; botao.disabled = false; botao.textContent = 'Tentar novamente';
-        registrar('periodo_falhou', { code: erro.codigo, message: erro.message });
+        registrar('periodo_falhou', { nivel: 'ERROR', code: erro.codigo, message: erro.message });
     }
     renderizarPeriodoPrevia();
 }
@@ -929,7 +1262,24 @@ function conectarCampos() {
         if (!$(campo)) continue;
         $(campo).oninput = () => { if (campo === 'titulo') atual.titulo = $(campo).value; else atual[campo] = $(campo).value; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); atualizarSeletorConteudos(); };
     }
-    $('tipoMidia').onchange = () => { atual.tipoMidia = $('tipoMidia').value; IR.sincronizarUrlsPublicas(atual); atual.estado = 'rascunho'; marcarAlterado(); sincronizarCampos(); renderizarRevisao(); };
+    $('tipoMidia').onchange = async () => {
+        if (!Publicacoes.definirTipoMidia(atual, $('tipoMidia').value)) return;
+        IR.sincronizarUrlsPublicas(atual);
+        atual.estado = 'rascunho';
+        marcarAlterado(); sincronizarCampos(); renderizarRevisao();
+        await salvar(true);
+    };
+    $('publicar-story').onchange = () => { atual.publicarStory = $('publicar-story').checked === true; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); salvar(true); registrar('destinos_alterados', { instagramStory: atual.publicarStory === true, operationId: atual.id }); };
+    $('publicar-facebook-story').onchange = () => { atual.publicarFacebookStory = $('publicar-facebook-story').checked === true; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); salvar(true); registrar('destinos_alterados', { facebookStory: atual.publicarFacebookStory === true, operationId: atual.id }); };
+    for (const destino of ['instagram', 'facebook']) $('publicar-' + destino).onchange = () => {
+        atual.publicarInstagram = $('publicar-instagram').checked;
+        atual.publicarFacebook = $('publicar-facebook').checked;
+        atual.estado = 'rascunho';
+        marcarAlterado(); atualizarControlesStory(); renderizarRevisao(); salvar(true);
+        registrar('destinos_alterados', { instagram: atual.publicarInstagram === true, facebook: atual.publicarFacebook === true, operationId: atual.id });
+    };
+    $('form-integracoes').onsubmit = salvarIntegracoes;
+    $('testar-facebook').onclick = testarFacebook;
     $('usar-visao').onchange = () => { atual.usarVisao = $('usar-visao').checked; marcarAlterado(); };
     $('arquivos').onchange = async event => { const arquivos = [...event.target.files]; event.target.value = ''; event.target.disabled = true; try { await processarArquivos(arquivos); } finally { event.target.disabled = false; } };
     $('gerar-legenda').onclick = () => gerarLegenda(false);
@@ -939,9 +1289,10 @@ function conectarCampos() {
     $('modelo-astra').onchange = () => { atual.modeloAstra = $('modelo-astra').value; marcarAlterado(); mostrarModeloSelecionado(); };
     $('revisar').onclick = marcarRevisaoHumana;
     $('aprovar').onclick = async () => {
-        if (!IR.midiasPublicasProntas(atual) || R.validar(atual, Date.now(), { exigirMidia: false }).some(i => !i.ok)) { renderizarRevisao(); avisar('Ainda há pendências.'); return; }
+        if (validacoesDaRevisao().some(i => !i.ok)) { renderizarRevisao(); avisar('Ainda há pendências.'); return; }
         atual.estado = 'confirmado'; marcarAlterado(); renderizarRevisao();
         const salvo = await salvar(true);
+        registrar('conteudo_confirmado', { status: salvo ? 'persistido' : 'local', operationId: atual.id, destinos: [atual.publicarInstagram !== false && 'instagram:feed', atual.publicarStory && 'instagram:story', atual.publicarFacebook && 'facebook:feed', atual.publicarFacebookStory && 'facebook:story'].filter(Boolean) });
         avisar(salvo ? 'Conteúdo confirmado. Escolha publicar agora ou ir para o agendamento.' : 'Conteúdo confirmado nesta aba, mas ainda não foi persistido.');
     };
     $('salvar').onclick = () => salvarEAvancar();
@@ -958,6 +1309,8 @@ function conectarCampos() {
     $('nova').onclick = novaPublicacao;
     $('conteudo-atual').onchange = () => trocarConteudo($('conteudo-atual').value);
     $('template-salvar').onclick = salvarTemplatePadrao;
+    $('template-atualizar').onclick = atualizarTemplateSelecionado;
+    $('template-seletor').onchange = () => { const template = templatesBiblioteca.find(item => item.id === $('template-seletor').value); if (template) preencherFormularioTemplate(template); else { templateSelecionadoId = ''; renderizarTemplates(); } };
     $('template-aplicar').onclick = aplicarTemplateAtual;
     $('template-auto').onchange = () => { templatePadrao.aplicarAutomatico = $('template-auto').checked; };
     $('anteriores-mais').onclick = () => carregarAnteriores(false);
@@ -980,6 +1333,7 @@ function restaurarDatasPeriodo() {
 }
 
 async function iniciar() {
+    carregarIntegracoes();
     aplicarMarca(); conectarCampos();
     try {
         banco = await new Promise((resolve, reject) => {
@@ -996,8 +1350,9 @@ async function iniciar() {
         if (Array.isArray(salvos) && salvos.length) { conteudos = salvos.map(p => Publicacoes.migrarPublicacao(p)); atual = conteudos[0]; $('salvamento').textContent = 'Conteúdos restaurados deste navegador'; }
         const planoSalvo = await lerArmazenamento('plano-periodo-rascunho');
         if (planoSalvo?.id && Array.isArray(planoSalvo.itens)) planoPeriodo = planoSalvo;
-        try { const config = await cliente.solicitar('/empresa/template-padrao', undefined, { prazo: 10000 }); if (config?.templatePadrao) templatePadrao = config.templatePadrao; } catch { /* offline */ }
     } catch { avisar('Armazenamento local indisponível.'); }
+    try { const config = await cliente.solicitar('/empresa/template-padrao', undefined, { prazo: 10000 }); if (config?.templatePadrao) templatePadrao = config.templatePadrao; } catch { /* offline */ }
+    await carregarRecorrentes();
     if (!atual.templateTexto && templatePadrao.texto) atual.templateTexto = templatePadrao.texto;
     IR.sincronizarUrlsPublicas(atual);
     sincronizarCampos(); carregarTemplateNoCampo(); atualizarSeletorConteudos(); preencherCamposRecorrentes();
@@ -1012,7 +1367,12 @@ async function iniciar() {
     }
     restaurarDatasPeriodo();
     window.iniciarDiagnostico?.((rota, corpo, opcoes) => cliente.solicitar(rota, corpo, opcoes));
-    verificarServidor(); carregarModelos(); carregarAnteriores(true); carregarRecorrentes();
+    await verificarServidor();
+    const rascunhosNoServidor = await carregarRascunhosBackend();
+    $('salvamento').textContent = rascunhosNoServidor ? 'Rascunhos sincronizados com o servidor' : 'Somente neste navegador · servidor indisponível';
+    await carregarBibliotecaTemplates();
+    sincronizarCampos(); atualizarSeletorConteudos(); renderizarMidias(); renderizarRevisao(); renderizarStatusPublicacao();
+    carregarModelos(); carregarAnteriores(true);
     globalThis.AstraContexto = {
         avisar,
         cliente: (rota, corpo, opcoes) => cliente.solicitar(rota, corpo, opcoes),
@@ -1022,6 +1382,11 @@ async function iniciar() {
         registrarDiagnostico: (secao, evento, dados) => registrar(evento, dados)
     };
     window.AstraContexto = globalThis.AstraContexto;
+    window.MetaConexao?.iniciar({ cliente: (rota, corpo, opcoes) => cliente.solicitar(rota, corpo, opcoes), aoAtualizar: async () => { await carregarIntegracoes(); await restaurarConexoes(); }, aoConectar: perfil => { perfilFacebook = perfil; $('status-facebook').textContent = perfil ? `Página conectada: ${perfil.name} · ID ${perfil.id}` : 'Conecte ou verifique a Página.'; renderizarRevisao(); } });
+    window.AstraLogs?.iniciar({ cliente: (rota, corpo, opcoes) => cliente.solicitar(rota, corpo, opcoes), timezone: atual.fuso });
+    window.addEventListener?.('error', evento => window.AstraLogs?.registrar({ nivel: 'ERROR', modulo: 'FRONTEND', acao: 'erro_nao_tratado', mensagem: evento.message, contexto: { arquivo: evento.filename, linha: evento.lineno } }));
+    window.addEventListener?.('unhandledrejection', evento => window.AstraLogs?.registrar({ nivel: 'ERROR', modulo: 'FRONTEND', acao: 'promise_rejeitada', mensagem: evento.reason?.message || String(evento.reason || '') }));
+    await restaurarConexoes();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar);

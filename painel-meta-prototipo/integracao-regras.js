@@ -133,6 +133,18 @@ function urlPublica(valor) {
 
 function urlPublicaHttps(valor) { return urlPublica(valor); }
 
+/** Confirma o contrato local obrigatório de Reel MP4. */
+function arquivoReelMp4(midia) {
+    return Boolean(midia) && midia.tipo === 'video' && midia.mime === 'video/mp4' && /\.mp4$/i.test(String(midia.nome || ''));
+}
+
+/** Aceita URL .mp4 ou uma mídia local MP4 cuja URL pública foi verificada no upload. */
+function reelMp4Valido(publicacao) {
+    if (!urlPublicaHttps(publicacao?.videoUrl)) return false;
+    try { if (/\.mp4$/i.test(new URL(publicacao.videoUrl).pathname)) return true; } catch { return false; }
+    return (publicacao.imagens || []).some(midia => midia.urlPublica === publicacao.videoUrl && arquivoReelMp4(midia));
+}
+
 /** Confirma o tipo de publicação aceito pelo fluxo. */
 function tipoMidiaDefinido(publicacao) { return ['imagem', 'carrossel', 'reel'].includes(publicacao?.tipoMidia); }
 
@@ -147,7 +159,7 @@ function sincronizarUrlsPublicas(publicacao) {
 /** Exige a URL pública correspondente ao tipo de publicação selecionado. */
 function midiasPublicasProntas(publicacao) {
     if (publicacao?.tipoMidia === 'imagem') return urlPublicaHttps(publicacao.imagemUrl);
-    if (publicacao?.tipoMidia === 'reel') return urlPublicaHttps(publicacao.videoUrl);
+    if (publicacao?.tipoMidia === 'reel') return reelMp4Valido(publicacao);
     if (publicacao?.tipoMidia !== 'carrossel') return false;
     const midias = Array.isArray(publicacao.imagens) ? publicacao.imagens : [];
     return midias.length >= 2 && midias.every(item => urlPublicaHttps(item.urlPublica));
@@ -162,6 +174,7 @@ function montarPrompt(p, reescrever = false, comImagem = false) {
         `${reescrever ? 'Reescreva' : 'Crie'} uma legenda em português para Instagram. Retorne apenas a legenda para revisão humana.`,
         comImagem ? 'Use os fatos confirmados e os elementos visíveis na imagem, sem inventar informações.' : 'Use somente os fatos fornecidos. Não invente preços, promoções, endereços ou detalhes visuais. Você não recebeu imagens.',
         'Não acrescente hashtags, localização ou websites: o painel adiciona esses dados separadamente.',
+        'Trate a organização como empresa, sem atribuir gênero ao nome da marca. Use o nome sem artigo A/O e sem contrações da/do/na/no antes dele. Não reescreva nomes próprios nem invente o nome da empresa.',
         `Contexto e fatos confirmados:\n${contexto.trim() || 'Nenhum contexto adicional fornecido.'}`,
         reescrever ? `Legenda a reescrever:\n${base}` : '',
         (p.palavras || '').trim() ? `Dicas de tema para inspiração (não obrigatórias):\n${p.palavras}` : '',
@@ -175,7 +188,9 @@ function assinaturaConteudo(p) {
         legenda: p.legenda, templateTexto: p.templateTexto, tema: p.tema, fatos: p.fatos, fatosIa: p.fatosIa, textoMidia: p.textoMidia, contexto: p.contexto, objetivo: p.objetivo,
         hashtags: p.hashtags, palavras: p.palavras, ideias: p.ideias, revisoes: p.revisoes,
         incluir: p.incluir, local: p.local, maps: p.maps, site1: p.site1, site2: p.site2,
-        tipoMidia: p.tipoMidia, imagemUrl: p.imagemUrl, videoUrl: p.videoUrl,
+        tipoMidia: p.tipoMidia, imagemUrl: p.imagemUrl, videoUrl: p.videoUrl, publicarStory: p.publicarStory === true,
+        publicarInstagram: p.publicarInstagram !== false, publicarFacebook: p.publicarFacebook === true,
+        publicarFacebookStory: p.publicarFacebookStory === true,
         imagens: (p.imagens || []).map(item => ({ id: item.id, urlPublica: item.urlPublica, tipo: item.tipo }))
     });
 }
@@ -183,9 +198,27 @@ function assinaturaConteudo(p) {
 /** Valida exclusivamente a publicação imediata do Instagram. */
 function validarInstagram(p, regras) {
     const itens = regras.validar(p, Date.now(), { exigirMidia: false, exigirAgenda: false });
-    itens.push({ ok: tipoMidiaDefinido(p), texto: 'Tipo de publicação definido' });
-    itens.push({ ok: midiasPublicasProntas(p), texto: 'URL HTTPS pública da mídia' });
+    itens.push({ ok: midiasPublicasProntas(p), texto: 'Mídia disponível por URL HTTPS pública' });
+    itens.push({ ok: p.publicarInstagram !== false || p.publicarFacebook === true || p.publicarStory === true || p.publicarFacebookStory === true, texto: 'Ao menos um destino selecionado' });
+    if (p?.tipoMidia === 'reel') itens.push({ ok: reelMp4Valido(p), texto: 'Reel em vídeo MP4' });
+    if (p?.tipoMidia === 'carrossel' && (p?.publicarStory || p?.publicarFacebookStory)) itens.push({ ok: false, texto: 'Story separado indisponível para carrossel' });
     return itens;
+}
+
+/** Normaliza destinos independentes, mantendo o Feed Instagram padrão dos clientes antigos. */
+function destinosPublicacao(p = {}) {
+    return { instagram: p.publicarInstagram !== false, facebook: p.publicarFacebook === true, instagramStory: p.publicarStory === true, facebookStory: p.publicarFacebookStory === true };
+}
+/** Reúne elegibilidade editorial e operacional sem exigir conexão de destino desmarcado. */
+function avaliarPublicacaoImediata(p, regras, contexto = {}) {
+    const itens = validarInstagram(p, regras);
+    itens.push({ ok: contexto.servidorOnline === true, texto: 'Servidor disponível' });
+    if (p.publicarInstagram !== false || p.publicarStory === true) itens.push({ ok: contexto.instagramVerificado === true, texto: 'Instagram verificado' });
+    if (p.publicarFacebook === true || p.publicarFacebookStory === true) itens.push({ ok: contexto.facebookVerificado === true, texto: 'Página Facebook verificada' });
+    if (p.publicarStory === true) itens.push({ ok: contexto.contaInstagram === 'BUSINESS', texto: 'Story Instagram requer conta Business verificada' });
+    itens.push({ ok: p.estado === 'confirmado', texto: 'Conteúdo confirmado na Revisão' });
+    itens.push({ ok: !contexto.enviando && !['publicando', 'publicado'].includes(p.statusPublicacao), texto: p.statusPublicacao === 'publicado' ? 'Conteúdo já publicado; crie uma nova publicação' : 'Nenhum envio em andamento' });
+    return { itens, podePublicar: itens.every(item => item.ok), motivos: itens.filter(item => !item.ok).map(item => item.texto) };
 }
 
 /** Cria um cliente restrito às rotas do Astra local. */
@@ -193,14 +226,31 @@ function criarCliente(base, transporte = globalThis.fetch) {
     const endereco = new URL(base);
     if (!['localhost', '127.0.0.1'].includes(endereco.hostname) || endereco.protocol !== 'http:' || endereco.username || endereco.password) throw new Error('O painel deve acessar somente o bridge local.');
     const ROTAS = [
-        '/health', '/meta/me', '/media/upload/capabilities', '/media/upload',
+        '/health', '/meta/me', '/facebook/me', '/config/integracoes', '/meta/conexao', '/meta/oauth/iniciar', '/meta/oauth/verificar', '/meta/oauth/selecionar', '/meta/oauth/desconectar', '/media/upload/capabilities', '/media/upload',
         '/astra/models', '/astra/generate', '/instagram/publish',
         '/instagram/media', '/instagram/metrics/update', '/instagram/analysis',
         '/agenda/planos', '/agenda/executar', '/agenda/pausar', '/agenda/retomar', '/agenda/reagendar', '/agenda/cancelar',
-        '/empresa/config', '/empresa/template', '/empresa/agenda', '/empresa/template-padrao', '/empresa/recorrentes',
+        '/empresa/config', '/empresa/template', '/empresa/agenda', '/empresa/template-padrao', '/empresa/recorrentes', '/empresa/templates',
+        '/publicacoes',
+        '/logs', '/logs/resumo', '/logs/event',
         '/diagnostico/access', '/diagnostico/status', '/diagnostico/event', '/diagnostico/start', '/diagnostico/stop', '/diagnostico/mark', '/diagnostico/export'
     ];
     const mensagens = {
+        SESSAO_INVALIDA: 'Sessão expirada. Reabra o painel e tente novamente.',
+        META_CONFIG_INCOMPLETA: 'Preencha a configuração OAuth do aplicativo antes de conectar.',
+        META_CALLBACK_INVALIDO: 'Abra o Astra no mesmo endereço e porta cadastrados na URI de retorno.',
+        META_CONEXAO_OCUPADA: 'Aguarde a operação de conexão em andamento.',
+        META_AUTORIZACAO_FALHOU: 'Verifique as permissões e reconecte com Facebook.',
+        META_TOKEN_INCOMPATIVEL: 'A configuração precisa fornecer um token de usuário Facebook do mesmo aplicativo.',
+        META_PAGINA_INVALIDA: 'Página não autorizada ou diferente daquela aprovada. Verifique a seleção.',
+        META_CONEXAO_FALHOU: 'Não foi possível consultar a Meta. Tente novamente.',
+        META_LISTAGEM_INCOMPLETA: 'Listagem incompleta; nenhuma seleção parcial foi aplicada.',
+        CONFIG_INVALIDA: 'Configuração inválida. Confira os IDs e a versão da API.',
+        CONFIG_EM_USO: 'Aguarde a publicação em andamento antes de salvar configurações.',
+        DESTINO_OBRIGATORIO: 'Selecione Instagram ou Facebook.',
+        FACEBOOK_NAO_CONFIGURADO: 'Conecte com Facebook e selecione uma Página autorizada. Não é necessário copiar tokens.',
+        FACEBOOK_RECUSADO: 'O Facebook recusou a operação. Confira o token da Página, as permissões e a mídia.',
+        FACEBOOK_MIDIA_INVALIDA: 'Facebook aceita foto, vídeo ou conjunto de 2 a 10 fotos com URLs públicas. Stories e conjuntos com vídeos não estão habilitados neste fluxo.',
         INSTAGRAM_NAO_CONFIGURADO: 'Instagram não configurado no servidor.',
         INSTAGRAM_NAO_AUTENTICADO: 'Instagram não autenticado. Verifique a autorização no backend.',
         INSTAGRAM_TOKEN_INVALIDO: 'O token do Instagram expirou ou é inválido. Atualize INSTAGRAM_ACCESS_TOKEN no backend.',
@@ -208,6 +258,12 @@ function criarCliente(base, transporte = globalThis.fetch) {
         INSTAGRAM_URL_INACESSIVEL: 'A Meta não conseguiu baixar a mídia na URL pública informada.',
         INSTAGRAM_CONTAINER_FALHOU: 'O container da publicação não foi criado pela Meta. Veja a mensagem real e tente novamente.',
         INSTAGRAM_PUBLICACAO_FALHOU: 'A Meta criou o container, mas não confirmou a publicação. Confira o Instagram antes de tentar novamente.',
+        INSTAGRAM_CONTAINER_ERRO: 'A Meta informou erro ao processar a mídia. Revise o arquivo e a URL pública.',
+        INSTAGRAM_CONTAINER_EXPIRADO: 'O contêiner da Meta expirou. Revise a mídia antes de criar uma nova tentativa.',
+        INSTAGRAM_CONTAINER_TEMPO_ESGOTADO: 'A mídia ainda está sendo processada pela Meta. Tente novamente para consultar o mesmo contêiner.',
+        REEL_MP4_OBRIGATORIO: 'Reels exigem arquivo e URL de vídeo MP4.',
+        STORY_REQUER_BUSINESS: 'Stories exigem uma conta Instagram Business confirmada.',
+        STORY_CARROSSEL_NAO_SUPORTADO: 'Carrossel não é convertido automaticamente em Stories.',
         ASTRA_NAO_CONFIGURADA: 'Astra não configurada no servidor.',
         ASTRA_AUTORIZACAO: 'Autorização recusada pelo OpenRouter.',
         ASTRA_SALDO: 'Crédito/saldo insuficiente no OpenRouter.',
@@ -218,6 +274,8 @@ function criarCliente(base, transporte = globalThis.fetch) {
         ASTRA_CONEXAO: 'Falha de conexão com o OpenRouter.',
         ASTRA_RESPOSTA_INVALIDA: 'Astra/OpenRouter retornou uma resposta inválida.',
         ASTRA_SEM_TEXTO: 'Astra não retornou uma legenda.',
+        IMAGEM_INVALIDA: 'A análise visual exige uma imagem JPEG, PNG ou WebP de até 5 MB.',
+        VIDEO_REQUER_QUADROS: 'Recarregue o painel para preparar os quadros do MP4 antes da análise.',
         MODELO_NAO_PERMITIDO: 'Modelo indisponível na seleção atual. Atualize e escolha novamente.',
         CATALOGO_INDISPONIVEL: 'Não foi possível atualizar os modelos. Verifique a conexão.',
         CATALOGO_INVALIDO: 'O catálogo retornou um formato inesperado.',
@@ -228,7 +286,7 @@ function criarCliente(base, transporte = globalThis.fetch) {
         META_CONEXAO: 'Falha de conexão com a Meta. Confira o Instagram antes de repetir um envio.',
         META_RESPOSTA_INVALIDA: 'A Meta retornou uma resposta inválida.',
         MIDIA_STORAGE_NAO_CONFIGURADO: 'O armazenamento público ainda não foi configurado no servidor.',
-        MIDIA_FORMATO_INVALIDO: 'Use uma imagem JPEG, PNG ou WebP de até 5 MB.',
+        MIDIA_FORMATO_INVALIDO: 'Use JPEG, PNG, WebP ou MP4 de até 256 MB.',
         MIDIA_PUBLICA_INACESSIVEL: 'A imagem foi salva, mas a URL HTTPS não pôde ser acessada externamente.',
         MIDIA_UPLOAD_FALHOU: 'Não foi possível enviar a imagem ao armazenamento público.',
         MIDIA_UPLOAD_RECUSADO: 'O servidor remoto recusou o arquivo.',
@@ -244,8 +302,11 @@ function criarCliente(base, transporte = globalThis.fetch) {
         ORIGEM_RECUSADA: 'O servidor recusou a origem do painel. Abra pelo endereço local configurado.'
     };
 
+    let csrf;
     async function solicitar(rota, body, opcoes = {}) {
         if (!ROTAS.includes(rota)) throw new Error('Rota de integração não permitida.');
+        const protegida = body !== undefined && (rota.startsWith('/meta/oauth/') || rota === '/config/integracoes' || rota === '/logs/event');
+        if (protegida && !csrf) await solicitar('/meta/conexao');
         const destino = new URL(rota, endereco);
         for (const [chave, valor] of Object.entries(opcoes.params || {})) if (valor !== undefined && valor !== null) destino.searchParams.set(chave, String(valor));
         if (rota === '/astra/models' && opcoes.atualizar) destino.searchParams.set('refresh', '1');
@@ -253,20 +314,30 @@ function criarCliente(base, transporte = globalThis.fetch) {
         const timer = setTimeout(() => controller.abort(), opcoes.prazo || 10000);
         try {
             const resposta = await transporte(destino.href, {
-                method: body === undefined ? 'GET' : 'POST', signal: controller.signal,
+                method: body === undefined ? 'GET' : 'POST', signal: controller.signal, credentials: 'include',
                 headers: {
                     ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
                     ...(opcoes.id ? { 'X-Publicacao-Id': opcoes.id } : {}),
+                    ...(protegida ? { 'X-Astra-CSRF': csrf } : {}),
                     ...(opcoes.diagnosticoToken ? { 'X-Diagnostico-Token': opcoes.diagnosticoToken } : {})
                 },
                 ...(body === undefined ? {} : { body: JSON.stringify(body) })
             });
             let dados;
             try { dados = await resposta.json(); } catch { throw Object.assign(new Error('O servidor retornou uma resposta inválida.'), { codigo: 'RESPOSTA_INVALIDA' }); }
+            if (rota === '/meta/conexao' && typeof dados.csrf === 'string') csrf = dados.csrf;
+            if (dados.code === 'SESSAO_INVALIDA') csrf = undefined;
             if (!resposta.ok || dados.success === false) {
                 const codigo = Object.hasOwn(mensagens, dados.code) ? dados.code : 'FALHA_SERVICO';
-                const erroMidia = codigo.startsWith('MIDIA_') && typeof dados.error === 'string' ? dados.error.trim().slice(0, 400) : '';
-                throw Object.assign(new Error(erroMidia || mensagens[codigo] || 'O serviço recusou a solicitação. Verifique o console do bridge.'), { codigo, status: resposta.status });
+                const erroMidia = (codigo.startsWith('MIDIA_') || rota.startsWith('/meta/oauth/') || rota === '/facebook/me') && typeof dados.error === 'string' ? dados.error.trim().slice(0, 400) : '';
+                throw Object.assign(new Error(erroMidia || mensagens[codigo] || 'O serviço recusou a solicitação. Verifique o console do bridge.'), {
+                    codigo, status: resposta.status,
+                    containerId: typeof dados.containerId === 'string' ? dados.containerId : null,
+                    containerStatus: typeof dados.containerStatus === 'string' ? dados.containerStatus : null,
+                    publicacao: dados.publicacao || null,
+                    resultadosPublicacao: dados.resultadosPublicacao || null,
+                    destinoPublicacao: typeof dados.destinoPublicacao === 'string' ? dados.destinoPublicacao : null
+                });
             }
             return dados;
         } catch (erro) {
@@ -278,6 +349,6 @@ function criarCliente(base, transporte = globalThis.fetch) {
     return { solicitar };
 }
 
-const integracaoRegras = { urlPublica, urlPublicaHttps, tipoMidiaDefinido, sincronizarUrlsPublicas, midiasPublicasProntas, montarPrompt, assinaturaConteudo, validarInstagram, criarCliente };
+const integracaoRegras = { urlPublica, urlPublicaHttps, arquivoReelMp4, reelMp4Valido, tipoMidiaDefinido, sincronizarUrlsPublicas, midiasPublicasProntas, montarPrompt, assinaturaConteudo, validarInstagram, avaliarPublicacaoImediata, destinosPublicacao, criarCliente };
 if (typeof module !== 'undefined') module.exports = integracaoRegras;
 else globalThis.IntegracaoRegras = integracaoRegras;

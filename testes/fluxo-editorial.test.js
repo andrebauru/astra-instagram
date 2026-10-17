@@ -11,6 +11,17 @@ const Fluxo = require('../painel-meta-prototipo/fluxo-editorial');
 const { normalizarMidia } = require('../services/insights-service');
 
 const URL = 'https://quimbanda.jp/astra/media/public/imagem.png';
+const URL_VIDEO = 'https://quimbanda.jp/astra/media/public/video.mp4';
+
+test('agenda usa URL atual de cada mídia e reconhece MP4 com tipo legado', () => {
+    const midias = [{ id: '1', tipo: 'imagem', nome: 'filme.mp4' }, { id: '2', tipo: 'imagem' }];
+    const preparado = Fluxo.prepararMidiasParaAgenda(midias, [{ id: 'p', imagens: [{ ...midias[0], urlPublica: URL_VIDEO }, { ...midias[1], urlPublica: URL }] }]);
+    assert.equal(preparado[0].tipo, 'video');
+    assert.equal(preparado[0].urlPublica, URL_VIDEO);
+    assert.equal(preparado[1].urlPublica, URL);
+    assert.equal(PS.avaliarElegibilidadeOrganica(preparado[0]).elegivel, true);
+    assert.equal(PS.avaliarElegibilidadeOrganica(preparado[1]).elegivel, false);
+});
 
 function conteudoCompleto() {
     const p = R.criarConteudo();
@@ -22,7 +33,9 @@ function conteudoCompleto() {
 }
 
 function planoVariavel() {
-    const midias = Fluxo.prepararMidiasParaAgenda([{ id: 'midia-1', tipo: 'imagem', urlPublica: URL }], [conteudoCompleto()]);
+    const conteudo = conteudoCompleto();
+    conteudo.tipoMidia = 'reel'; conteudo.imagens = [{ id: 'midia-1', tipo: 'video', urlPublica: URL_VIDEO }];
+    const midias = Fluxo.prepararMidiasParaAgenda(conteudo.imagens, [conteudo]);
     return PS.planejarPeriodo({ id: 'plano-1', inicio: '2026-10-10', fim: '2026-10-10', timezone: 'Asia/Tokyo', quantidade: 1, diasPermitidos: [6], estrategiaHorario: 'manual', horarios: ['20:00'], permitirReutilizacao: true, variarTexto: true, nivelVariacao: 'Baixa' }, midias, { agoraMs: Date.parse('2026-10-08T00:00:00Z') });
 }
 
@@ -138,4 +151,3 @@ test('dados completos da publicação permanecem intactos entre transições de 
     assert.equal(clonado.ideias, original.ideias);
     assert.deepEqual(clonado.revisoes, original.revisoes);
 });
-

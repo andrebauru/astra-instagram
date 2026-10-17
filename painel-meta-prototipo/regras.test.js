@@ -63,7 +63,7 @@ test('migração é idempotente e preserva conteúdo', () => {
 });
 
 test('aprovacão semanal assina e edição exige nova aprovação', () => {
-    const plano = PS.aprovar(PS.planejar({ id: 'p1', semente: 's', inicio: '2026-09-28', fim: '2026-09-28', dias: [1], horarios: ['10:00'], porDia: 1, timezone: 'Asia/Tokyo', modo: 'manual' }, [{ id: 'a', tipo: 'imagem', status: 'disponível', urlPublica: 'https://midia.dominio-publico.com/a.jpg' }]));
+    const plano = PS.aprovar(PS.planejar({ id: 'p1', semente: 's', inicio: '2026-09-28', fim: '2026-09-28', dias: [1], horarios: ['10:00'], porDia: 1, timezone: 'Asia/Tokyo', modo: 'manual' }, [{ id: 'a', tipo: 'video', status: 'disponível', urlPublica: 'https://midia.dominio-publico.com/a.mp4' }]));
     assert.equal(plano.status, 'aprovado');
     assert.ok(plano.itens[0].approvalSignature);
     const editado = PS.editarItem(plano, plano.itens[0].id, { hora: '11:00' });

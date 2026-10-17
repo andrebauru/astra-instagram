@@ -68,6 +68,7 @@ test('Reel preenche videoUrl e não mexe em imagemUrl', () => {
     Publicacoes.registrarUrlPublica(p, 'v1', 'https://quimbanda.jp/astra/media/public/video.mp4', {});
     assert.equal(p.videoUrl, 'https://quimbanda.jp/astra/media/public/video.mp4');
     assert.equal(p.imagemUrl, 'https://quimbanda.jp/astra/media/public/imagem.png');
+    assert.equal(IR.midiasPublicasProntas(p), true);
 });
 
 test('carrossel guarda a URL em cada mídia sem sobrescrever imagemUrl', () => {
@@ -82,6 +83,39 @@ test('carrossel guarda a URL em cada mídia sem sobrescrever imagemUrl', () => {
     assert.equal(p.imagens[0].urlPublica, 'https://quimbanda.jp/astra/media/public/a.png');
     assert.equal(p.imagens[1].urlPublica, 'https://quimbanda.jp/astra/media/public/b.png');
     assert.equal(p.imagemUrl, '');
+});
+
+test('carrossel com 3 URLs HTTPS válidas libera a revisão', () => {
+    const p = R.criarConteudo();
+    p.tipoMidia = 'carrossel';
+    p.imagens = ['a', 'b', 'c'].map(id => ({ id, tipo: 'imagem', urlPublica: `https://quimbanda.jp/astra/media/public/${id}.png` }));
+    assert.equal(IR.midiasPublicasProntas(p), true);
+});
+
+test('carrossel com uma das 3 URLs faltando continua bloqueado', () => {
+    const p = R.criarConteudo();
+    p.tipoMidia = 'carrossel';
+    p.imagens = [
+        { id: 'a', tipo: 'imagem', urlPublica: 'https://quimbanda.jp/astra/media/public/a.png' },
+        { id: 'b', tipo: 'imagem', urlPublica: '' },
+        { id: 'c', tipo: 'imagem', urlPublica: 'https://quimbanda.jp/astra/media/public/c.png' }
+    ];
+    assert.equal(IR.midiasPublicasProntas(p), false);
+});
+
+test('mudança do select grava o valor interno aceito', () => {
+    const p = R.criarConteudo();
+    assert.equal(Publicacoes.definirTipoMidia(p, 'carrossel'), true);
+    assert.equal(p.tipoMidia, 'carrossel');
+    assert.equal(Publicacoes.definirTipoMidia(p, 'valor inválido'), false);
+    assert.equal(p.tipoMidia, 'carrossel');
+});
+
+test('publicação existente normaliza o rótulo visual e mantém o select compatível', () => {
+    const p = R.criarConteudo();
+    p.tipoMidia = 'Carrossel local';
+    Publicacoes.migrarPublicacao(p);
+    assert.equal(p.tipoMidia, 'carrossel');
 });
 
 test('migração não apaga urlPublica existente', () => {

@@ -4,16 +4,31 @@ const regrasFluxo = typeof require === 'function' ? require('./regras') : global
 
 /** Associa cada mídia ao conteúdo que fornece legenda, template e campos protegidos. */
 function prepararMidiasParaAgenda(midias = [], conteudos = []) {
-    return midias.map(midia => {
+    const individuais = midias.map(midia => {
         const conteudo = conteudos.find(item => (item.imagens || []).some(arquivo => arquivo.id === midia.id));
-        if (!conteudo) return { ...midia };
+        const arquivo = conteudo?.imagens.find(item => item.id === midia.id) || midia;
+        const tipo = arquivo.mime === 'video/mp4' || /\.mp4(?:[?#]|$)/i.test(arquivo.nome || arquivo.urlPublica || '') ? 'video' : arquivo.tipo;
+        if (!conteudo) return { ...midia, tipo };
         return {
             ...midia,
+            ...arquivo,
+            tipo,
             publicacaoId: conteudo.id,
             legendaEditorial: conteudo.legenda || '',
             legenda: regrasFluxo.compor(conteudo)
         };
     });
+    const carrosseis = conteudos.filter(conteudo => conteudo.tipoMidia === 'carrossel' && Array.isArray(conteudo.imagens)).map(conteudo => ({
+        id: `carrossel:${conteudo.id}`,
+        tipo: 'carrossel',
+        nome: conteudo.titulo || 'Carrossel',
+        status: 'disponível',
+        itens: conteudo.imagens.map(midia => ({ ...midia })),
+        publicacaoId: conteudo.id,
+        legendaEditorial: conteudo.legenda || '',
+        legenda: regrasFluxo.compor(conteudo)
+    }));
+    return [...individuais, ...carrosseis];
 }
 
 /** Gera variações em cópia do plano; qualquer falha preserva integralmente o original. */

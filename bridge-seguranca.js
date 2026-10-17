@@ -10,7 +10,7 @@ function erroSeguro(codigo, mensagem, status = 502) {
 /** Remove segredos configurados de campos textuais antes de qualquer resposta. */
 function ocultarSegredos(valor) {
     if (typeof valor !== 'string') return valor;
-    for (const nome of ['INSTAGRAM_ACCESS_TOKEN', 'OPENROUTER_API_KEY', 'META_VERIFY_TOKEN', 'MEDIA_UPLOAD_KEY']) {
+    for (const nome of ['META_APP_SECRET', 'INSTAGRAM_ACCESS_TOKEN', 'FACEBOOK_PAGE_ACCESS_TOKEN', 'OPENROUTER_API_KEY', 'META_VERIFY_TOKEN', 'MEDIA_UPLOAD_KEY']) {
         if (process.env[nome]) valor = valor.split(process.env[nome]).join('[oculto]');
     }
     return valor;
@@ -25,8 +25,9 @@ function autorizarOrigem(req, res) {
     if (host !== `127.0.0.1:${porta}` && host !== `localhost:${porta}`) throw erroSeguro('ORIGEM_RECUSADA', 'Use o endereço local do Astra Instagram Bridge.', 403);
     if (req.headers.origin && !permitidas.includes(req.headers.origin)) throw erroSeguro('ORIGEM_RECUSADA', 'Origem não autorizada para acessar o servidor local.', 403);
     if (req.headers.origin) res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+    if (req.headers.origin) res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Publicacao-Id, X-Diagnostico-Token');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Publicacao-Id, X-Diagnostico-Token, X-Astra-CSRF');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');

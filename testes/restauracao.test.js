@@ -139,8 +139,8 @@ test('poucos dados informam insuficiência', () => {
 // AGENDAMENTO POR PERÍODO
 // ============================================================
 
-function midia(id, tipo = 'imagem') {
-    return { id, tipo, status: 'disponível', urlPublica: `https://quimbanda.jp/astra/media/public/${id}.png`, legenda: `legenda ${id}`, miniatura: null };
+function midia(id, tipo = 'video') {
+    return { id, tipo, status: 'disponível', urlPublica: `https://quimbanda.jp/astra/media/public/${id}.${tipo === 'video' ? 'mp4' : 'png'}`, legenda: `legenda ${id}`, miniatura: null };
 }
 
 function configPeriodo(extra = {}) {

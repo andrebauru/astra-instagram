@@ -10,8 +10,9 @@
 
 const { erroSeguro, ocultarSegredos } = require('../bridge-seguranca');
 const { urlPublica } = require('../painel-meta-prototipo/integracao-regras');
+const { verificarUrlPublica } = require('../rede-publica');
 
-const FORMATOS_SUPORTADOS = ['imagem', 'reel', 'carrossel'];
+const FORMATOS_SUPORTADOS = ['imagem', 'reel', 'carrossel', 'story'];
 
 function criarInstagramService({
     token,
@@ -21,6 +22,7 @@ function criarInstagramService({
     registrar = () => {},
     contexto = () => ({}),
     fetchImpl,
+    resolverIPs,
     esperar = ms => new Promise(resolve => setTimeout(resolve, ms))
 } = {}) {
     if (!token) throw new Error('InstagramService exige INSTAGRAM_ACCESS_TOKEN.');
@@ -86,7 +88,7 @@ function criarInstagramService({
 
     /** Perfil profissional usado para confirmar a conexão. */
     async function perfil() {
-        return request('me', 'GET', { fields: 'id,username,account_type,media_count' }, 'instagram_profile');
+        return request(conta, 'GET', { fields: 'id,username,account_type,media_count' }, 'instagram_profile');
     }
 
     const CAMPOS_MIDIA = 'id,caption,timestamp,media_type,media_url,thumbnail_url,permalink,media_product_type,children{id,media_type,media_url,thumbnail_url,timestamp,media_product_type}';
@@ -179,17 +181,27 @@ function criarInstagramService({
         return request(containerId, 'GET', { fields: 'status_code,status' }, 'container_status');
     }
 
-    /** Aguarda o processamento (Reel/vídeo) antes de publicar. */
-    async function aguardarContainer(containerId, maxTentativas = 30) {
+    /** Anexa ao erro apenas o estado seguro necessário para retomar o mesmo contêiner. */
+    function erroComContainer(erro, containerId, estadoContainer) {
+        return Object.assign(erro, { containerId, estadoContainer });
+    }
+
+    /** Aguarda qualquer contêiner ficar pronto, sem solicitar publicação antes de FINISHED. */
+    async function aguardarContainer(containerId, maxTentativas = 30, aoEstado = () => {}) {
         const prazo = Date.now() + 180000;
         for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
             if (Date.now() >= prazo) break;
-            const status = await statusContainer(containerId);
-            if (status.status_code === 'FINISHED') return status;
-            if (status.status_code === 'ERROR' || status.status_code === 'EXPIRED') throw erroSeguro('REEL_PROCESSAMENTO', 'Falha de processamento do vídeo. Verifique o formato e a disponibilidade do arquivo.');
+            let status;
+            try { status = await statusContainer(containerId); }
+            catch (erro) { throw erroComContainer(erro, containerId, 'DESCONHECIDO'); }
+            const codigo = String(status?.status_code || '').toUpperCase();
+            await aoEstado({ containerId, estadoContainer: codigo || 'DESCONHECIDO' });
+            if (codigo === 'FINISHED' || codigo === 'PUBLISHED') return { ...status, status_code: codigo };
+            if (codigo === 'ERROR') throw erroComContainer(erroSeguro('INSTAGRAM_CONTAINER_ERRO', 'A Meta informou erro ao processar a mídia. Verifique o arquivo e a URL pública.', 422), containerId, codigo);
+            if (codigo === 'EXPIRED') throw erroComContainer(erroSeguro('INSTAGRAM_CONTAINER_EXPIRADO', 'O contêiner da Meta expirou antes da publicação. Revise a mídia antes de criar uma nova tentativa.', 409), containerId, codigo);
             await esperar(5000);
         }
-        throw erroSeguro('REEL_TEMPO_ESGOTADO', 'O vídeo não terminou de processar no prazo. Nenhuma publicação foi solicitada para este container.', 504);
+        throw erroComContainer(erroSeguro('INSTAGRAM_CONTAINER_TEMPO_ESGOTADO', 'A mídia ainda está em processamento na Meta. Nenhuma publicação foi solicitada; tente novamente para consultar o mesmo contêiner.', 504), containerId, 'IN_PROGRESS');
     }
 
     async function criarImagem(url, legenda) {
@@ -198,6 +210,21 @@ function criarInstagramService({
 
     async function criarReel(url, legenda) {
         return request(`${conta}/media`, 'POST', { media_type: 'REELS', video_url: url, caption: legenda }, 'create_reel_container');
+    }
+
+    async function criarStory(url, tipoMidia) {
+        const params = { media_type: 'STORIES' };
+        if (tipoMidia === 'video') params.video_url = url; else params.image_url = url;
+        return request(`${conta}/media`, 'POST', params, 'create_story_container');
+    }
+
+    /** Reels e Stories em vídeo aceitam exclusivamente MP4 comprovado. */
+    async function validarVideoMp4(url) {
+        try { if (/\.mp4$/i.test(new URL(url).pathname)) return true; } catch { /* validado abaixo */ }
+        try {
+            await verificarUrlPublica(url, { transporte: (...args) => transporte()(...args), resolverIPs, tiposAceitos: ['video/mp4'] });
+            return true;
+        } catch { throw erroSeguro('REEL_MP4_OBRIGATORIO', 'Reels e Stories em vídeo exigem URL .mp4 ou Content-Type video/mp4 confirmado.', 400); }
     }
 
     /** Lê permalink e timestamp de uma mídia já publicada (somente leitura). */
@@ -226,7 +253,7 @@ function criarInstagramService({
      * @param {string} [entrada.caption]
      * @param {string} [entrada.publicacaoId] correlaciona diagnóstico
      */
-    async function publish({ formato, mediaUrl, imageUrl, videoUrl, itens, caption, publicacaoId = null } = {}) {
+    async function publish({ formato, mediaUrl, imageUrl, videoUrl, itens, caption, publicacaoId = null, containerId = null, mediaIdConhecido = null, storyTipo = null, aoEstado = () => {} } = {}) {
         const legenda = typeof caption === 'string' ? caption : '';
         const tipo = formato === 'reel' ? 'reel' : formato === 'carrossel' ? 'carrossel' : formato === 'story' ? 'story' : 'imagem';
         console.log(`[INSTAGRAM] publish_requested type=${tipo}${publicacaoId ? ` publication=${publicacaoId}` : ''}`);
@@ -238,42 +265,71 @@ function criarInstagramService({
                 console.log('[INSTAGRAM] publish_failed stage=validation');
                 throw erroSeguro('INSTAGRAM_MEDIA_INVALIDA', 'Informe de 2 a 20 itens com URL HTTPS pública acessível.', 400);
             }
-            const filhos = [];
-            for (const item of lista) {
-                const formatoItem = item.tipo === 'video' ? 'video' : 'imagem';
+            let pai = containerId ? { id: containerId } : null;
+            if (!pai) {
+                const filhos = [];
+                for (const item of lista) {
+                    const formatoItem = item.tipo === 'video' ? 'video' : 'imagem';
+                    console.log('[INSTAGRAM] creating_media_container');
+                    const container = await criarContainer('INSTAGRAM_CONTAINER_FALHOU', () => formatoItem === 'video'
+                        ? criarItemCarrossel({ videoUrl: item.url })
+                        : criarItemCarrossel({ imageUrl: item.url }));
+                    if (!container?.id) { console.log('[INSTAGRAM] publish_failed stage=container_create'); throw erroSeguro('INSTAGRAM_CONTAINER_FALHOU', 'A Meta não retornou o identificador de um item do carrossel.'); }
+                    console.log(`[INSTAGRAM] container_created id=${container.id}`);
+                    await aguardarContainer(container.id);
+                    filhos.push(container.id);
+                }
                 console.log('[INSTAGRAM] creating_media_container');
-                const container = await criarContainer('INSTAGRAM_CONTAINER_FALHOU', () => formatoItem === 'video'
-                    ? criarItemCarrossel({ videoUrl: item.url })
-                    : criarItemCarrossel({ imageUrl: item.url }));
-                if (!container?.id) { console.log('[INSTAGRAM] publish_failed stage=container_create'); throw erroSeguro('INSTAGRAM_CONTAINER_FALHOU', 'A Meta não retornou o identificador de um item do carrossel.'); }
-                console.log(`[INSTAGRAM] container_created id=${container.id}`);
-                if (formatoItem === 'video') await aguardarContainer(container.id);
-                filhos.push(container.id);
+                pai = await criarContainer('INSTAGRAM_CONTAINER_FALHOU', () => request(`${conta}/media`, 'POST', { media_type: 'CAROUSEL', children: filhos.join(','), caption: legenda }, 'create_carousel_container'));
+                if (!pai?.id) { console.log('[INSTAGRAM] publish_failed stage=container_create'); throw erroSeguro('INSTAGRAM_CONTAINER_FALHOU', 'A Meta não retornou o identificador do carrossel.'); }
+                console.log(`[INSTAGRAM] container_created id=${pai.id}`);
+                await aoEstado({ containerId: pai.id, estadoContainer: 'CRIADO' });
             }
-            console.log('[INSTAGRAM] creating_media_container');
-            const pai = await criarContainer('INSTAGRAM_CONTAINER_FALHOU', () => request(`${conta}/media`, 'POST', { media_type: 'CAROUSEL', children: filhos.join(','), caption: legenda }, 'create_carousel_container'));
-            if (!pai?.id) { console.log('[INSTAGRAM] publish_failed stage=container_create'); throw erroSeguro('INSTAGRAM_CONTAINER_FALHOU', 'A Meta não retornou o identificador do carrossel.'); }
-            console.log(`[INSTAGRAM] container_created id=${pai.id}`);
-            await aguardarContainer(pai.id);
+            const estado = await aguardarContainer(pai.id, 30, aoEstado);
+            if (estado.status_code === 'PUBLISHED') {
+                const recuperado = String(mediaIdConhecido || estado.media_id || estado.published_media_id || pai.id);
+                return { mediaId: recuperado, containerId: pai.id, formato: tipo, publicadoEm: new Date().toISOString(), recuperado: true };
+            }
             console.log('[INSTAGRAM] publishing_container');
-            const publicado = await publicarContainer(pai.id);
+            let publicado;
+            try { publicado = await publicarContainer(pai.id); }
+            catch (erro) { throw erroComContainer(erro, pai.id, 'FINISHED'); }
+            await aoEstado({ containerId: pai.id, estadoContainer: 'PUBLISHED', mediaId: String(publicado.id) });
             console.log(`[INSTAGRAM] publish_success media_id=${publicado.id}`);
             registrar('PUBLISH', 'publish_confirmed', { operacao: tipo, publication: publicacaoId, metaMediaId: publicado.id, result: 'publicação confirmada' });
             return { mediaId: String(publicado.id), containerId: pai.id, formato: tipo, publicadoEm: new Date().toISOString() };
         }
 
-        const url = tipo === 'reel' ? (videoUrl || mediaUrl) : (imageUrl || mediaUrl);
+        const storyVideo = tipo === 'story' && storyTipo === 'video';
+        const url = tipo === 'reel' || storyVideo ? (videoUrl || mediaUrl) : (imageUrl || mediaUrl);
         if (typeof url !== 'string' || !urlPublica(url)) {
             console.log('[INSTAGRAM] publish_failed stage=validation');
             throw erroSeguro('INSTAGRAM_MEDIA_INVALIDA', 'A mídia precisa de uma URL HTTPS pública acessível por servidor externo.', 400);
         }
-        console.log('[INSTAGRAM] creating_media_container');
-        const container = await criarContainer('INSTAGRAM_CONTAINER_FALHOU', () => tipo === 'reel' ? criarReel(url, legenda) : criarImagem(url, legenda));
-        if (!container?.id) { console.log('[INSTAGRAM] publish_failed stage=container_create'); throw erroSeguro('INSTAGRAM_CONTAINER_FALHOU', 'A Meta não retornou o identificador da mídia.'); }
-        console.log(`[INSTAGRAM] container_created id=${container.id}`);
-        if (tipo === 'reel') await aguardarContainer(container.id);
+        if (tipo === 'reel' || storyVideo) await validarVideoMp4(url);
+        if (tipo === 'story') {
+            const contaStory = await perfil();
+            if (String(contaStory?.account_type || '').toUpperCase() !== 'BUSINESS') throw erroSeguro('STORY_REQUER_BUSINESS', 'Stories exigem uma conta Instagram Business confirmada.', 403);
+        }
+        let container = containerId ? { id: containerId } : null;
+        if (!container) {
+            console.log('[INSTAGRAM] creating_media_container');
+            container = await criarContainer('INSTAGRAM_CONTAINER_FALHOU', () => tipo === 'reel' ? criarReel(url, legenda) : tipo === 'story' ? criarStory(url, storyVideo ? 'video' : 'imagem') : criarImagem(url, legenda));
+            if (!container?.id) { console.log('[INSTAGRAM] publish_failed stage=container_create'); throw erroSeguro('INSTAGRAM_CONTAINER_FALHOU', 'A Meta não retornou o identificador da mídia.'); }
+            console.log(`[INSTAGRAM] container_created id=${container.id}`);
+            await aoEstado({ containerId: container.id, estadoContainer: 'CRIADO' });
+        }
+        const estado = await aguardarContainer(container.id, 30, aoEstado);
+        if (estado.status_code === 'PUBLISHED') {
+            const recuperado = String(mediaIdConhecido || estado.media_id || estado.published_media_id || container.id);
+            registrar('PUBLISH', 'publish_recovered', { operacao: tipo, publication: publicacaoId, metaMediaId: recuperado, result: 'publicação já confirmada' });
+            return { mediaId: recuperado, containerId: container.id, formato: tipo, publicadoEm: new Date().toISOString(), recuperado: true };
+        }
         console.log('[INSTAGRAM] publishing_container');
-        const publicado = await publicarContainer(container.id);
+        let publicado;
+        try { publicado = await publicarContainer(container.id); }
+        catch (erro) { throw erroComContainer(erro, container.id, 'FINISHED'); }
+        await aoEstado({ containerId: container.id, estadoContainer: 'PUBLISHED', mediaId: String(publicado.id) });
         console.log(`[INSTAGRAM] publish_success media_id=${publicado.id}`);
         registrar('PUBLISH', 'publish_confirmed', { operacao: tipo, publication: publicacaoId, metaMediaId: publicado.id, result: 'publicação confirmada' });
         return { mediaId: String(publicado.id), containerId: container.id, formato: tipo, publicadoEm: new Date().toISOString() };
