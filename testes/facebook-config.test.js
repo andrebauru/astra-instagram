@@ -80,6 +80,13 @@ test('Facebook publica imagem, mantém token fora da URL e não repete sucesso',
     await assert.rejects(servico.publish({ ...entrada, caption: 'mudou' }, 'pub'), erro => erro.codigo === 'PUBLICACAO_DIVERGENTE');
 });
 
+test('Facebook encaminha a legenda completa com links ao campo caption da foto', async () => {
+    const { servico, chamadas } = preparar();
+    const legenda = 'Visite https://site.example e veja o mapa https://maps.example/local';
+    await servico.publish({ formato: 'imagem', imageUrl: 'https://exemplo.com/foto.jpg', caption: legenda }, 'links');
+    assert.equal(new URLSearchParams(chamadas[0].opcoes.body).get('caption'), legenda);
+});
+
 test('Facebook publica três fotos preservando todos os IDs anexados', async () => {
     let n = 0;
     const { servico, chamadas } = preparar(() => ({ id: `id-${++n}` }));

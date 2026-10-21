@@ -149,12 +149,18 @@ function salvarArmazenamento(chave, valor) {
 async function salvar(silencioso = false) {
     if (!banco) { if (!silencioso) avisar('Armazenamento local indisponível.'); return false; }
     try {
-        await salvarArmazenamento('conteudos', conteudos);
-        try { await salvarArmazenamento('biblioteca-midias', bibliotecaMidias); } catch { /* melhor esforço */ }
         const sincronizado = await sincronizarPublicacaoBackend(atual);
         ultimoSalvamentoServidor = sincronizado;
+        let cacheLocalSalvo = true;
+        try {
+            await salvarArmazenamento('conteudos', conteudos);
+            try { await salvarArmazenamento('biblioteca-midias', bibliotecaMidias); } catch { /* melhor esforço */ }
+        } catch (erro) {
+            cacheLocalSalvo = false;
+            if (!sincronizado) throw erro;
+        }
         $('salvamento').textContent = sincronizado
-            ? 'Rascunho salvo no servidor · ' + new Date().toLocaleTimeString('pt-BR')
+            ? cacheLocalSalvo ? 'Rascunho salvo no servidor · ' + new Date().toLocaleTimeString('pt-BR') : 'Rascunho salvo no servidor · cache local indisponível'
             : 'Somente neste navegador · sincronização pendente';
         if (!silencioso) avisar('✓ Salvo');
         registrar('rascunho_salvo', { status: sincronizado ? 'servidor' : 'local', operationId: atual.id });
@@ -223,7 +229,7 @@ async function carregarRascunhosBackend() {
 /** Captura os campos da etapa antes de persistir, inclusive dados recorrentes. */
 function sincronizarFormularioNoEstado() {
     for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'hashtags', 'palavras', 'ideias', 'imagemUrl', 'videoUrl', 'legenda', 'titulo']) if ($(campo)) atual[campo] = $(campo).value;
-    for (const [id, campo] of [['site', 'site'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) if ($(id)) atual[campo] = $(id).value;
+    for (const [id, campo] of [['local', 'local'], ['site', 'site'], ['site1', 'site1'], ['site2', 'site2'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) if ($(id)) atual[campo] = $(id).value;
     if ($('hashtags-padrao')?.value.trim()) atual.hashtags = $('hashtags-padrao').value.trim();
     atual.publicarStory = $('publicar-story')?.checked === true;
     atual.publicarFacebookStory = $('publicar-facebook-story')?.checked === true;
@@ -292,6 +298,17 @@ function atualizarRodapeEtapa(nome = abaAtual()) {
     const proxima = Publicacoes.proximaEtapa(nome);
     $('etapa-salvar').textContent = `Etapa ${rotulos[nome] || nome}`;
     $('salvar').textContent = proxima ? `Salvar e continuar para ${rotulos[proxima]}` : 'Salvar alterações';
+}
+
+/** Separa a republicação do histórico original antes de editar seus campos. */
+function prepararReutilizacao() {
+    if (atual.statusPublicacao !== 'publicado') return false;
+    atual = Publicacoes.reutilizarPublicacao(atual);
+    conteudos.push(atual);
+    confirmacaoAtual = undefined;
+    atualizarSeletorConteudos();
+    avisar('Nova cópia para republicação. Original preservado; confira os destinos antes de publicar.');
+    return true;
 }
 
 function novaPublicacao() {
@@ -370,6 +387,8 @@ function renderizarMidias() {
             const botao = elemento('button', texto); botao.type = 'button';
             botao.disabled = deslocamento !== 0 && (indice + deslocamento < 0 || indice + deslocamento >= atual.imagens.length);
             botao.onclick = () => {
+                prepararReutilizacao();
+                atual.estado = 'rascunho';
                 if (!deslocamento) atual.imagens.splice(indice, 1);
                 else [atual.imagens[indice], atual.imagens[indice + deslocamento]] = [atual.imagens[indice + deslocamento], atual.imagens[indice]];
                 IR.sincronizarUrlsPublicas(atual); marcarAlterado(); renderizarMidias(); renderizarRevisao();
@@ -418,6 +437,7 @@ async function processarArquivos(arquivos) {
         catch (erro) { falhas.push(arquivo.name); linha.textContent = `✗ ${arquivo.name} · ${erro.message}`; registrar('media_read', { file: arquivo.name, result: 'falhou' }); }
     }
     if (!lidas.length) { avisar(falhas.length ? 'Nenhum arquivo válido foi adicionado.' : 'Nenhum arquivo selecionado.'); return; }
+    if (acao !== 'distribuir') prepararReutilizacao();
     bibliotecaMidias.push(...lidas); bibliotecaMidias = bibliotecaMidias.slice(-200);
     if (acao === 'carrossel') {
         atual.tipoMidia = 'carrossel'; atual.imagens = [...atual.imagens, ...lidas];
@@ -448,6 +468,7 @@ async function processarArquivos(arquivos) {
 function sincronizarCampos() {
     $('tipoMidia').value = atual.tipoMidia;
     for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'hashtags', 'palavras', 'ideias', 'imagemUrl', 'videoUrl', 'legenda']) if ($(campo)) $(campo).value = atual[campo] || '';
+    for (const [id, campo] of [['local', 'local'], ['site', 'site'], ['site1', 'site1'], ['site2', 'site2'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['hashtags-padrao', 'hashtags'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) if ($(id)) $(id).value = atual[campo] || '';
     if ($('titulo')) $('titulo').value = atual.titulo || '';
     if ($('template-texto')) $('template-texto').value = templatePadrao.texto || '';
     if ($('template-auto')) $('template-auto').checked = templatePadrao.aplicarAutomatico === true;
@@ -501,9 +522,9 @@ function preencherFormularioTemplate(template) {
     $('template-nome').value = template.nome || '';
     $('template-texto').value = template.texto || '';
     $('template-auto').checked = template.aplicarAutomatico === true;
-    for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'palavras', 'ideias']) if (typeof template[campo] === 'string') $(campo).value = template[campo];
-    if (typeof template.hashtagsPublicacao === 'string') $('hashtags').value = template.hashtagsPublicacao;
-    for (const [id, campo] of [['site', 'site'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['hashtags-padrao', 'hashtags'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) $(id).value = template[campo] || '';
+    for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'palavras', 'ideias']) $(campo).value = template[campo] || '';
+    $('hashtags').value = template.hashtagsPublicacao || '';
+    for (const [id, campo] of [['local', 'local'], ['site', 'site'], ['site1', 'site1'], ['site2', 'site2'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['hashtags-padrao', 'hashtags'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) $(id).value = template[campo] || '';
     renderizarTemplates();
 }
 
@@ -511,9 +532,9 @@ function templateDoFormulario() {
     const ler = id => ($(id)?.value || '').trim();
     return {
         id: templateSelecionadoId || null, nome: ler('template-nome') || 'Template sem nome', texto: $('template-texto').value || '',
-        ...Object.fromEntries(['objetivo', 'tema', 'fatos', 'contexto', 'palavras', 'ideias'].map(campo => [campo, $(campo).value || ''])),
+        ...Object.fromEntries(['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'palavras', 'ideias'].map(campo => [campo, $(campo).value || ''])),
         hashtagsPublicacao: $('hashtags').value || '',
-        hashtags: ler('hashtags-padrao'), site: ler('site'), maps: ler('maps'), linksAdicionais: ler('links-adicionais'),
+        hashtags: ler('hashtags-padrao'), local: ler('local'), site: ler('site'), site1: ler('site1'), site2: ler('site2'), maps: ler('maps'), linksAdicionais: ler('links-adicionais'),
         informacoesAdicionais: ler('informacoes-fixas'), chamadasFixas: ler('chamadas-fixas'), aplicarAutomatico: $('template-auto').checked === true
     };
 }
@@ -605,14 +626,14 @@ async function atualizarTemplateSelecionado() {
 
 function aplicarTemplateAtual() {
     const template = templateDoFormulario();
-    for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'palavras', 'ideias']) atual[campo] = template[campo];
+    preencherFormularioTemplate(template);
+    sincronizarFormularioNoEstado();
     atual.templateTexto = template.texto && !atual.legenda.includes(template.texto.trim()) ? template.texto : '';
     const hashtagsPresentes = new Set(R.hashtags(atual.legenda).map(tag => tag.toLowerCase()));
     atual.hashtags = [...new Set(`${template.hashtagsPublicacao || ''} ${template.hashtags || ''}`.split(/\s+/).filter(tag => tag && !hashtagsPresentes.has(tag.toLowerCase())))].join(' ');
-    atual.site = template.site; atual.maps = template.maps; atual.linksAdicionais = template.linksAdicionais;
+    atual.local = template.local; atual.site = template.site; atual.site1 = template.site1; atual.site2 = template.site2;
+    atual.maps = template.maps; atual.linksAdicionais = template.linksAdicionais;
     atual.informacoesAdicionais = template.informacoesAdicionais; atual.chamadasFixas = template.chamadasFixas;
-    atual.incluir = { ...atual.incluir, site: Boolean(template.site), maps: Boolean(template.maps) };
-    $('hashtags').value = atual.hashtags;
     marcarAlterado(); renderizarRevisao(); avisar('Template aplicado à publicação atual.');
 }
 
@@ -648,18 +669,16 @@ function renderizarRevisao() {
         revisaoIdeias.append(label);
     }
 
-    const validacoes = validacoesDaRevisao();
-    $('validacoes').replaceChildren(...validacoes.map(item => elemento('li', `${item.ok ? '✓' : '○'} ${item.texto}`, item.ok ? 'ok' : 'pendente')));
-    const pronto = validacoes.every(item => item.ok);
-    $('aprovar').disabled = !pronto || atual.estado === 'confirmado';
-    $('decisao-publicacao').hidden = atual.estado !== 'confirmado';
-    renderizarValidacoesPublicacao(pronto);
+    atualizarChecklist();
 }
 
+/** Atualiza checklist e ações juntos, inclusive após marcar uma revisão individual. */
 function atualizarChecklist() {
     const validacoes = validacoesDaRevisao();
     $('validacoes').replaceChildren(...validacoes.map(item => elemento('li', `${item.ok ? '✓' : '○'} ${item.texto}`, item.ok ? 'ok' : 'pendente')));
     $('aprovar').disabled = !validacoes.every(item => item.ok) || atual.estado === 'confirmado';
+    $('aprovar').textContent = atual.estado === 'confirmado' ? 'Conteúdo já confirmado' : 'Confirmar conteúdo';
+    $('decisao-publicacao').hidden = atual.estado !== 'confirmado';
     renderizarValidacoesPublicacao();
 }
 
@@ -688,6 +707,8 @@ function renderizarValidacoesPublicacao() {
     $('validacoes-publicacao').replaceChildren(...itens.map(item => elemento('li', `${item.ok ? '✓' : '○'} ${item.texto}`, item.ok ? 'ok' : 'pendente')));
     $('preparar-publicacao').disabled = !avaliacao.podePublicar;
     $('publicar-agora-revisao').disabled = !avaliacao.podePublicar;
+    $('titulo-decisao-publicacao').textContent = atual.statusPublicacao === 'publicado' ? 'Este registro já foi marcado como publicado. Novo envio está bloqueado para evitar duplicação.' : atual.statusPublicacao === 'publicando' ? 'Existe uma tentativa de publicação em andamento.' : 'Conteúdo confirmado. Escolha o próximo passo:';
+    $('motivo-publicacao-revisao').textContent = avaliacao.podePublicar ? 'Pronto para abrir a confirmação dos destinos. Nenhuma publicação foi iniciada.' : avaliacao.motivos.join(' · ');
     if (!avaliacao.podePublicar) { $('resultado-publicacao').textContent = avaliacao.motivos.join(' · '); return; }
     $('resultado-publicacao').textContent = atual.statusPublicacao === 'falhou'
         ? `${atual.erroPublicacao || 'A tentativa falhou.'} Você pode corrigir o conteúdo e tentar novamente.`
@@ -953,12 +974,12 @@ async function carregarAnteriores(reset = false) {
 function renderizarAnteriores() {
     const lista = $('anteriores-lista');
     lista.replaceChildren();
-    anteriores.forEach(item => {
+    anteriores.forEach((item, indice) => {
         const cartao = elemento('article', undefined, 'cartao-anterior');
         const moldura = elemento('span', 'Carregando…', 'miniatura-anterior');
         const fontes = Array.isArray(item.miniaturas) && item.miniaturas.length ? item.miniaturas : (item.miniatura ? [item.miniatura] : []);
         if (fontes.length) {
-            const img = elemento('img'); img.alt = `Miniatura de ${item.formato || 'publicação'}`; img.loading = 'lazy'; img.hidden = true;
+            const img = elemento('img'); img.alt = `Miniatura de ${item.formato || 'publicação'}`; img.loading = indice < 6 ? 'eager' : 'lazy';
             let indiceFonte = 0;
             img.onload = () => { img.hidden = false; moldura.textContent = ''; moldura.append(img); };
             img.onerror = () => { indiceFonte += 1; if (indiceFonte < fontes.length) img.src = fontes[indiceFonte]; else { img.remove(); moldura.textContent = 'Sem miniatura'; } };
@@ -1186,7 +1207,13 @@ function ctxMidias() { return Fluxo.prepararMidiasParaAgenda(globalThis.AstraCon
 function renderizarPeriodoPrevia() {
     const container = $('periodo-previa'); container.replaceChildren();
     if (!planoPeriodo) return;
-    for (const bloqueio of planoPeriodo.inelegiveis || []) container.append(elemento('p', `Não elegível para agendamento orgânico: ${bloqueio.motivo}`, 'pendente'));
+    for (const bloqueio of planoPeriodo.inelegiveis || []) {
+        const regraImagem = bloqueio.tipo !== 'video' && bloqueio.tipo !== 'reel';
+        const aviso = regraImagem
+            ? `Imagem ignorada na agenda orgânica: ${bloqueio.motivo} Vídeos e Reels continuam elegíveis.`
+            : `Mídia ignorada na agenda orgânica: ${bloqueio.motivo}`;
+        container.append(elemento('p', aviso, 'nota'));
+    }
     for (const item of planoPeriodo.itens) {
         const linha = elemento('div', undefined, 'agenda-item');
         const sincronizacao = planoPeriodo.sincronizacao?.estado ? ` · ${planoPeriodo.sincronizacao.estado.replaceAll('_', ' ')}` : '';
@@ -1260,18 +1287,23 @@ async function persistirPlanoPeriodo() {
 function conectarCampos() {
     for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'hashtags', 'palavras', 'ideias', 'imagemUrl', 'videoUrl', 'legenda', 'titulo']) {
         if (!$(campo)) continue;
-        $(campo).oninput = () => { if (campo === 'titulo') atual.titulo = $(campo).value; else atual[campo] = $(campo).value; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); atualizarSeletorConteudos(); };
+        $(campo).oninput = () => { prepararReutilizacao(); atual[campo] = $(campo).value; if (campo !== 'titulo') atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); atualizarSeletorConteudos(); };
+    }
+    for (const [id, campo] of [['local', 'local'], ['site', 'site'], ['site1', 'site1'], ['site2', 'site2'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas'], ['hashtags-padrao', 'hashtags']]) {
+        $(id).oninput = () => { prepararReutilizacao(); atual[campo] = $(id).value; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); };
     }
     $('tipoMidia').onchange = async () => {
+        prepararReutilizacao();
         if (!Publicacoes.definirTipoMidia(atual, $('tipoMidia').value)) return;
         IR.sincronizarUrlsPublicas(atual);
         atual.estado = 'rascunho';
         marcarAlterado(); sincronizarCampos(); renderizarRevisao();
         await salvar(true);
     };
-    $('publicar-story').onchange = () => { atual.publicarStory = $('publicar-story').checked === true; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); salvar(true); registrar('destinos_alterados', { instagramStory: atual.publicarStory === true, operationId: atual.id }); };
-    $('publicar-facebook-story').onchange = () => { atual.publicarFacebookStory = $('publicar-facebook-story').checked === true; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); salvar(true); registrar('destinos_alterados', { facebookStory: atual.publicarFacebookStory === true, operationId: atual.id }); };
+    $('publicar-story').onchange = () => { prepararReutilizacao(); atual.publicarStory = $('publicar-story').checked === true; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); salvar(true); registrar('destinos_alterados', { instagramStory: atual.publicarStory === true, operationId: atual.id }); };
+    $('publicar-facebook-story').onchange = () => { prepararReutilizacao(); atual.publicarFacebookStory = $('publicar-facebook-story').checked === true; atual.estado = 'rascunho'; marcarAlterado(); renderizarRevisao(); salvar(true); registrar('destinos_alterados', { facebookStory: atual.publicarFacebookStory === true, operationId: atual.id }); };
     for (const destino of ['instagram', 'facebook']) $('publicar-' + destino).onchange = () => {
+        prepararReutilizacao();
         atual.publicarInstagram = $('publicar-instagram').checked;
         atual.publicarFacebook = $('publicar-facebook').checked;
         atual.estado = 'rascunho';

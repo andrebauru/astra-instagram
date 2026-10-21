@@ -113,7 +113,7 @@ function planejar(config, midias = []) {
     const erros = validarConfiguracao(config); if (erros.length) return { valido: false, erros, faltam: 0, itens: [] };
     const tipos = config.tipos?.length ? config.tipos : ['imagem', 'video', 'carrossel'];
     const avaliadas = midias.map(item => ({ item, avaliacao: avaliarParaDestinos(item, config.destinos) }));
-    const inelegiveis = avaliadas.filter(entrada => !entrada.avaliacao.elegivel).map(entrada => ({ id: entrada.item.id, motivo: entrada.avaliacao.motivo }));
+    const inelegiveis = avaliadas.filter(entrada => !entrada.avaliacao.elegivel).map(entrada => ({ id: entrada.item.id, tipo: entrada.item.tipo || 'imagem', motivo: entrada.avaliacao.motivo }));
     const elegiveis = avaliadas.filter(entrada => entrada.avaliacao.elegivel).map(entrada => entrada.item).filter(item => tipos.includes(item.tipo) && !['reservada', 'utilizada'].includes(item.status));
     const datas = datasDoPeriodo(config.inicio, config.fim, config.dias.map(Number));
     const slots = datas.flatMap(data => config.horarios.slice(0, Number(config.porDia)).map(hora => ({ data, hora })));
@@ -219,7 +219,7 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
 
     const tiposAceitos = config.tipos?.length ? config.tipos : ['imagem', 'video', 'carrossel'];
     const avaliadas = (Array.isArray(midias) ? midias : []).map(item => ({ item, avaliacao: avaliarParaDestinos(item, config.destinos) }));
-    const inelegiveis = avaliadas.filter(entrada => !entrada.avaliacao.elegivel).map(entrada => ({ id: entrada.item.id, motivo: entrada.avaliacao.motivo }));
+    const inelegiveis = avaliadas.filter(entrada => !entrada.avaliacao.elegivel).map(entrada => ({ id: entrada.item.id, tipo: entrada.item.tipo || 'imagem', motivo: entrada.avaliacao.motivo }));
     const estoque = avaliadas.filter(entrada => entrada.avaliacao.elegivel).map(entrada => entrada.item).filter(m => tiposAceitos.includes(m.tipo) && m.status !== 'utilizada');
     let indiceMidia = 0;
     const usadas = new Set();

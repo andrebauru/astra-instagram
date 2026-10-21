@@ -63,7 +63,11 @@ async function sincronizarPlano(plano, { prepararVariacoes, aprovar, enviar } = 
     try {
         if (typeof prepararVariacoes === 'function') preparado = await prepararVariacoes(preparado);
         const aprovado = aprovar(preparado);
-        const resposta = await enviar(aprovado);
+        // Miniaturas podem ser base64; não fazem parte do plano persistido e estouram o limite HTTP.
+        const payload = structuredClone(aprovado);
+        if (payload.config && typeof payload.config === 'object') delete payload.config.miniatura;
+        for (const item of payload.itens || []) delete item.miniatura;
+        const resposta = await enviar(payload);
         const confirmado = resposta?.success === true && Array.isArray(resposta.planos) && resposta.planos.some(item => item.id === aprovado.id);
         if (!confirmado) throw Object.assign(new Error('O servidor não confirmou a persistência do plano.'), { codigo: 'PLANO_NAO_CONFIRMADO' });
         return { ...aprovado, sincronizacao: { estado: 'confirmado_servidor', confirmadoEm: new Date().toISOString(), erro: null } };

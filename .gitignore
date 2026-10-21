@@ -24,3 +24,6 @@ Thumbs.db
 upload.php
 .user.ini
 media/
+
+# Pacotes locais de release
+release-artifacts/

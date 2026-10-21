@@ -30,6 +30,15 @@ test('publish de imagem cria container e publica', async () => {
     assert.equal(resultado.formato, 'imagem');
 });
 
+test('publish encaminha a legenda integral com URLs ao endpoint de container do Instagram', async () => {
+    const eventos = [];
+    const legenda = 'Confira: https://site.example/oferta\nMapa: https://maps.example/local';
+    const servico = criarServico(url => url.includes('media_publish') ? json({ id: 'pub-links' }) : url.includes('status_code') ? json({ status_code: 'FINISHED' }) : json({ id: 'container-links' }), eventos);
+    await servico.publish({ formato: 'imagem', imageUrl: 'https://midia.dominio-publico.com/a.jpg', caption: legenda });
+    const criacao = eventos.find(item => item.url.endsWith('/media') && item.metodo === 'POST');
+    assert.equal(new URLSearchParams(criacao.corpo).get('caption'), legenda);
+});
+
 test('publish de reel aguarda FINISHED antes de publicar', async () => {
     const chamadas = [];
     const servico = criarServico(url => {

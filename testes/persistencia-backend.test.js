@@ -60,9 +60,15 @@ test('rascunho persiste sem mídia embutida e conflito não sobrescreve versão 
 test('painel expõe biblioteca, Story e criação evidente de rascunho histórico', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'painel-meta-prototipo', 'index.html'), 'utf8');
     const js = fs.readFileSync(path.join(__dirname, '..', 'painel-meta-prototipo', 'painel.js'), 'utf8');
+    const css = fs.readFileSync(path.join(__dirname, '..', 'painel-meta-prototipo', 'estilo.css'), 'utf8');
     for (const id of ['template-nome', 'template-seletor', 'template-atualizar', 'publicar-story', 'periodo-story']) assert.match(html, new RegExp(`id="${id}"`));
     assert.match(js, /Usar como exemplo e criar rascunho/);
     assert.match(js, /referenciaImportada/);
     assert.match(js, /nova\.imagens = \[\]/);
     assert.match(js, /Rascunho salvo no servidor/);
+    assert.match(js, /const sincronizado = await sincronizarPublicacaoBackend\(atual\);/);
+    assert.match(js, /if \(!sincronizado\) throw erro;/);
+    assert.match(js, /img\.loading = indice < 6 \? 'eager' : 'lazy'/);
+    assert.doesNotMatch(js, /img\.hidden = true/);
+    assert.match(css, /#urls-publicas-midias li,#urls-publicas-midias a\{overflow-wrap:anywhere/);
 });

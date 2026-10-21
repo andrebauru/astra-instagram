@@ -219,7 +219,7 @@ function normalizarPlanoRecebido(plano = {}) {
             mediaId: typeof item.mediaId === 'string' ? item.mediaId.slice(0, 100) : null,
             tipo: ['imagem', 'video', 'carrossel'].includes(item.tipo) ? item.tipo : 'imagem',
             data: item.data, hora: item.hora,
-            timezone: typeof item.timezone === 'string' ? item.timezone.slice(0, 60) : config.timezone,
+            timezone: typeof item.timezone === 'string' ? item.timezone.slice(0, 60) : (typeof plano.timezone === 'string' ? plano.timezone.slice(0, 60) : null),
             destinos: Array.isArray(item.destinos) ? item.destinos.filter(d => ['Instagram', 'Instagram Feed', 'Instagram Story', 'Facebook Page'].includes(d)) : ['Instagram Feed'],
             facebookPageId: typeof item.facebookPageId === 'string' && /^\d+$/.test(item.facebookPageId) ? item.facebookPageId : null,
             legenda: typeof item.legenda === 'string' ? item.legenda.slice(0, 5000) : '',
@@ -257,9 +257,11 @@ function sanitizarTemplateBiblioteca(valor) {
     return {
         id: /^[A-Za-z0-9_.:-]{1,160}$/.test(String(bruto.id || '')) ? bruto.id : null,
         nome: texto('nome', 120).trim() || 'Template sem nome', texto: texto('texto'), hashtags: texto('hashtags', 5000),
-        ...Object.fromEntries(['objetivo', 'tema', 'fatos', 'contexto', 'palavras', 'ideias', 'hashtagsPublicacao'].map(campo => [campo, texto(campo)])),
+        ...Object.fromEntries(['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'palavras', 'ideias', 'hashtagsPublicacao'].map(campo => [campo, texto(campo)])),
+        local: texto('local', 1000), site1: texto('site1', 1000), site2: texto('site2', 1000),
         site: texto('site', 1000), maps: texto('maps', 1000), linksAdicionais: texto('linksAdicionais', 5000),
         informacoesAdicionais: texto('informacoesAdicionais', 5000), chamadasFixas: texto('chamadasFixas', 5000),
+        incluir: Object.fromEntries(['local', 'maps', 'site1', 'site2', 'site'].map(campo => [campo, bruto.incluir?.[campo] === true])),
         aplicarAutomatico: bruto.aplicarAutomatico === true
     };
 }

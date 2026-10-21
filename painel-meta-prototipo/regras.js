@@ -28,14 +28,13 @@ function compor(publicacao) {
 
     const corpo = semTagsObrigatorias(publicacao.legenda);
     const template = semTagsObrigatorias(publicacao.templateTexto);
-    const local = publicacao.incluir?.local && publicacao.local?.trim() ? publicacao.local.trim() : '';
+    const local = String(publicacao.local || '').trim();
     const baseLinks = [corpo, template].join('\n');
     const sites = [];
-    const candidatos = [
-        publicacao.incluir?.site && publicacao.site?.trim() ? publicacao.site.trim() : '',
-        publicacao.incluir?.maps && publicacao.maps?.trim() ? publicacao.maps.trim() : '',
-        ...String(publicacao.linksAdicionais || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-    ];
+    // A aba Informações não tem controles de inclusão: todo link preenchido deve ir para a legenda.
+    const candidatos = [publicacao.site, publicacao.maps, publicacao.site1, publicacao.site2,
+        ...String(publicacao.linksAdicionais || '').split(/\r?\n/)]
+        .map(valor => String(valor || '').trim()).filter(Boolean);
     for (const valor of candidatos) {
         if (!valor || sites.includes(valor)) continue;
         const escapado = valor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

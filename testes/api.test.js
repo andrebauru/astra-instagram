@@ -133,14 +133,20 @@ test('biblioteca de templates e rascunhos usam o backend como fonte de verdade',
     });
 });
 
-test('template preserva Informações mas exclui resultados IA e legenda', async () => {
+test('template persiste e restaura todos os campos de Informações sem misturar registros', async () => {
     await comServidor(async ({ solicitar }) => {
-        const campos = { objetivo: 'Divulgar', tema: 'Evento', fatos: 'Domingo', contexto: 'Empresa', palavras: 'Comunidade', ideias: 'Participação', hashtagsPublicacao: '#evento' };
-        const dados = await (await solicitar('/empresa/templates', { novo: true, template: { nome: 'Completo', ...campos, fatosIa: 'Não salvar', textoMidia: 'Não salvar', legenda: 'Não salvar' } })).json();
-        for (const [campo, valor] of Object.entries(campos)) assert.equal(dados.template[campo], valor);
-        for (const campo of ['fatosIa', 'textoMidia', 'legenda']) assert.equal(dados.template[campo], undefined);
+        const campos = { objetivo: 'Divulgar', tema: 'Evento', fatos: 'Domingo', contexto: 'Empresa', fatosIa: 'Bandeira azul', textoMidia: 'Texto no cartaz', palavras: 'Comunidade', ideias: 'Participação', hashtagsPublicacao: '#evento', hashtags: '#marca', local: 'Salão', site1: 'https://a.example/1', site2: 'https://a.example/2', site: 'https://a.example', maps: 'https://maps.example', linksAdicionais: 'https://a.example/x', informacoesAdicionais: 'Entrada livre', chamadasFixas: 'Participe', incluir: { local: true, site1: true, site2: false, site: true, maps: true } };
+        const dados = await (await solicitar('/empresa/templates', { novo: true, template: { nome: 'Completo', ...campos, legenda: 'Não salvar' } })).json();
+        for (const [campo, valor] of Object.entries(campos)) {
+            if (valor && typeof valor === 'object') assert.deepEqual(dados.template[campo], valor);
+            else assert.equal(dados.template[campo], valor);
+        }
+        assert.equal(dados.template.legenda, undefined);
+        const outro = await (await solicitar('/empresa/templates', { novo: true, template: { nome: 'Separado', objetivo: 'Segundo', site: 'https://b.example' } })).json();
         const lista = await (await solicitar('/empresa/templates')).json();
-        assert.equal(lista.templates.find(t => t.id === dados.template.id).tema, 'Evento');
+        assert.deepEqual(lista.templates.find(t => t.id === dados.template.id), dados.template);
+        assert.equal(lista.templates.find(t => t.id === outro.template.id).tema, '');
+        assert.equal(lista.templates.find(t => t.id === outro.template.id).site, 'https://b.example');
     });
 });
 
@@ -397,6 +403,15 @@ test('confirmar plano de agenda não publica imediatamente', async () => {
         const resposta = await (await solicitar('/agenda/planos', { planos: [plano] })).json();
         assert.equal(resposta.success, true);
         assert.equal(chamadas().filter(c => c.url.includes('graph.instagram') || c.url.includes('graph.facebook')).length, 0, 'agendar não publica');
+    });
+});
+
+test('plano de agenda sem fuso no item não provoca erro no servidor', async () => {
+    await comServidor(async ({ solicitar }) => {
+        const plano = { id: 'plano-sem-fuso-item', timezone: 'Asia/Tokyo', status: 'rascunho', itens: [{ id: 'i-sem-fuso', tipo: 'video', data: '2099-01-02', hora: '10:00', destinos: ['Instagram Feed'], status: 'rascunho' }] };
+        const resposta = await solicitar('/agenda/planos', { planos: [plano] });
+        assert.equal(resposta.status, 200);
+        assert.equal((await resposta.json()).success, true);
     });
 });
 

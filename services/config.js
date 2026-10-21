@@ -27,7 +27,7 @@ function lerInteiro(valor, padrao) {
 
 const config = {
     porta: lerInteiro(process.env.PORT, 8080),
-    build: process.env.ASTRA_BUILD_ID || 'astra-instagram-2',
+    build: process.env.ASTRA_BUILD_ID || 'astra-instagram-1.1.0',
 
     instagram: Object.freeze({
         token: process.env.INSTAGRAM_ACCESS_TOKEN || '',

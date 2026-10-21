@@ -110,11 +110,15 @@
         <label>Ideias obrigatórias<textarea id="ideias" rows="2" placeholder="Uma por linha"></textarea></label>
         <h3>Links e dados recorrentes</h3>
         <div class="duas-colunas">
+          <label>Local<input id="local" placeholder="Local ou endereço"></label>
           <label>Link da página/site<input id="site" type="url" placeholder="https://..."></label>
+          <label>Link adicional 1<input id="site1" type="url" placeholder="https://..."></label>
+          <label>Link adicional 2<input id="site2" type="url" placeholder="https://..."></label>
           <label>Link Google Maps<input id="maps" type="url" placeholder="https://maps.google..."></label>
           <label>Links adicionais<textarea id="links-adicionais" rows="2" placeholder="Um por linha (opcional)"></textarea></label>
           <label>Hashtags padrão<input id="hashtags-padrao" placeholder="#exunojapao #quimbandajapao"></label>
         </div>
+        <p class="nota">Os links são incluídos no texto enviado. No Feed do Instagram, URLs na legenda aparecem como texto e não são clicáveis.</p>
         <label>Informações adicionais fixas<textarea id="informacoes-fixas" rows="2" placeholder="Informações que quase sempre entram na publicação."></textarea></label>
         <label>Chamadas fixas<textarea id="chamadas-fixas" rows="2" placeholder="Chamadas recorrentes."></textarea></label>
         <div class="acoes"><button id="salvar-recorrentes" type="button">Salvar dados recorrentes</button></div>
@@ -164,7 +168,8 @@
           <button id="aprovar" class="primario" type="button">Confirmar conteúdo</button>
         </div>
         <div id="decisao-publicacao" class="decisao-publicacao" hidden>
-          <strong>Conteúdo confirmado. Escolha o próximo passo:</strong>
+          <strong id="titulo-decisao-publicacao">Conteúdo confirmado. Escolha o próximo passo:</strong>
+          <p id="motivo-publicacao-revisao" role="status" class="nota"></p>
           <div class="acoes">
             <button id="publicar-agora-revisao" class="primario" type="button">Publicar agora</button>
             <button id="ir-agendamento" type="button">Salvar e ir para agendamento</button>
@@ -179,7 +184,7 @@
         <div id="status-publicacao"></div>
         <ul id="validacoes-publicacao" class="validacoes"></ul>
         <p id="resultado-publicacao" role="status"></p>
-        <button id="preparar-publicacao" class="primario" type="button">Publicar agora no Instagram</button>
+        <button id="preparar-publicacao" class="primario" type="button">Publicar agora nos destinos selecionados</button>
 
         <h3>Agendamento por período</h3>
         <div class="duas-colunas">

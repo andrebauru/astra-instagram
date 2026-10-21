@@ -78,6 +78,33 @@ test('sincronização só confirma com resposta do backend e retry mantém o mes
     assert.equal(chamadas, 2); assert.equal(ids.size, 1, 'retry é idempotente pelo ID do plano');
 });
 
+test('sincronização remove miniaturas base64 do pedido sem alterar a prévia local', async () => {
+    const plano = planoVariavel();
+    plano.config.miniatura = `data:image/png;base64,${'x'.repeat(1_100_000)}`;
+    plano.itens[0].miniatura = `data:image/png;base64,${'y'.repeat(1_100_000)}`;
+    const miniaturaLocal = plano.itens[0].miniatura;
+    let enviado;
+    const confirmado = await Fluxo.sincronizarPlano(plano, {
+        aprovar: PS.aprovar,
+        enviar: async payload => { enviado = payload; return { success: true, planos: [{ id: payload.id }] }; }
+    });
+    assert.equal(enviado.itens[0].miniatura, undefined);
+    assert.equal(enviado.config.miniatura, undefined);
+    assert.equal(plano.itens[0].miniatura, miniaturaLocal, 'prévia local preservada');
+    assert.equal(confirmado.itens[0].miniatura, miniaturaLocal, 'miniatura continua disponível após confirmar');
+});
+
+test('plano mantém vídeo elegível e identifica imagem única como mídia ignorada', () => {
+    const video = { id: 'video-1', tipo: 'video', status: 'disponível', urlPublica: URL_VIDEO };
+    const imagem = { id: 'imagem-1', tipo: 'imagem', status: 'disponível', urlPublica: URL };
+    const plano = PS.planejar({ id: 'plano-misto', inicio: '2099-01-02', fim: '2099-01-02', timezone: 'Asia/Tokyo', dias: [5], horarios: ['10:00'], porDia: 1, tipos: ['imagem', 'video'], modo: 'manual' }, [imagem, video]);
+    assert.equal(plano.itens.length, 1);
+    assert.equal(plano.itens[0].tipo, 'video');
+    assert.deepEqual(plano.inelegiveis.map(item => ({ id: item.id, tipo: item.tipo })), [{ id: 'imagem-1', tipo: 'imagem' }]);
+    const painel = fs.readFileSync('./painel-meta-prototipo/painel.js', 'utf8');
+    assert.match(painel, /Imagem ignorada na agenda orgânica[\s\S]*Vídeos e Reels continuam elegíveis/);
+});
+
 test('primeira tentativa, falha, retry e publicação concluída respeitam idempotência', () => {
     const p = conteudoCompleto(); p.estado = 'confirmado';
     const primeira = Publicacoes.iniciarTentativa(p, 'tentativa-00000001', '2026-10-08T00:00:00Z');

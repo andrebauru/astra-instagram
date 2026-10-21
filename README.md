@@ -15,12 +15,21 @@ parte do fluxo. A agenda de período também permite Facebook Page como destino 
 
 - Node.js 24 ou posterior.
 - Navegador moderno com IndexedDB.
-- `.env` local com as credenciais do backend (nunca versionado).
+- `.env` local com as credenciais do backend (criado no primeiro `npm start`, nunca versionado).
 
 ```powershell
 npm start     # bridge + painel em http://localhost:8080/painel/
 npm test      # suíte automatizada (provedores fictícios)
+npm run build:windows # pacote Astra.exe para Windows x64
 ```
+
+Na primeira execução, `npm start` cria `.env` a partir do modelo sem segredos
+em `.env.example`. O arquivo existente nunca é substituído; preencha as
+credenciais somente no `.env` local.
+
+O pacote Windows inclui o executável de inicialização, o runtime Node.js e os
+arquivos necessários do Astra. Na primeira execução, `Astra.exe` cria `.env`
+local a partir do modelo; credenciais e dados locais não entram no ZIP.
 
 O painel também pode ser servido isoladamente com `npm run painel`
 (`http://127.0.0.1:4317`), acessando o bridge em `http://127.0.0.1:8080`.

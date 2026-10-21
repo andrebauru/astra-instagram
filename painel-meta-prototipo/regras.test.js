@@ -44,8 +44,16 @@ test('ideias exigem revisão humana', () => {
 test('metadados separados e URLs perigosas recusadas', () => {
     const p = exemplo(); p.local = 'Local informado'; p.site1 = 'https://example.com'; p.incluir.local = true;
     assert.ok(R.compor(p).includes(p.local));
-    assert.ok(!R.compor(p).includes(p.site1));
+    assert.ok(R.compor(p).includes(p.site1));
     p.site1 = 'javascript:alert(1)'; assert.ok(R.validar(p).some(item => !item.ok && item.texto.includes('site1')));
+});
+
+test('todos os links preenchidos entram na legenda sem depender de flags ocultas', () => {
+    const p = exemplo();
+    Object.assign(p, { site: 'https://site.example/a', maps: 'https://maps.example/b', site1: 'https://site.example/c', site2: 'https://site.example/d', linksAdicionais: 'https://site.example/e\nhttps://site.example/f' });
+    p.incluir = { site: false, maps: false, site1: false, site2: false };
+    const legenda = R.compor(p);
+    for (const link of [p.site, p.maps, p.site1, p.site2, ...p.linksAdicionais.split('\n')]) assert.ok(legenda.includes(link), `${link} deve constar na legenda`);
 });
 
 test('converte fusos e recusa datas inválidas ou transições ambíguas', () => {

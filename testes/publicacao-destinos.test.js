@@ -26,6 +26,43 @@ function publicacao(extra = {}) {
 
 const contextoBase = { servidorOnline: true, instagramVerificado: true, facebookVerificado: true, contaInstagram: 'BUSINESS', enviando: false };
 
+test('reutilização preserva original e mídia, mas remove identidade e recibos anteriores', () => {
+    const P = require('../painel-meta-prototipo/publicacoes');
+    const original = publicacao({ id: 'original', statusPublicacao: 'publicado', instagramMediaId: 'meta-id', publicacaoReal: { estado: 'publicado' }, resultadosPublicacao: { feed: { idPublicado: 'meta-id' } }, tentativasPublicacao: [{ estado: 'publicado' }] });
+    const antes = structuredClone(original);
+    const copia = P.reutilizarPublicacao(original);
+    assert.notEqual(copia.id, original.id);
+    assert.equal(copia.origemPublicacaoId, original.id);
+    assert.equal(copia.statusPublicacao, 'nao_publicada');
+    assert.equal(copia.instagramMediaId, null);
+    assert.equal(copia.publicacaoReal, null);
+    assert.deepEqual(copia.resultadosPublicacao, {});
+    assert.deepEqual(copia.tentativasPublicacao, []);
+    copia.imagens[0].nome = 'alterada';
+    assert.deepEqual(original, antes);
+});
+
+test('renomear publicação enviada libera novo envio sem alterar o original', () => {
+    const { contexto, stub } = ambiente();
+    contexto.registroTeste = publicacao({ id: 'original', titulo: 'Anterior', publicarFacebook: true, statusPublicacao: 'publicado' });
+    vm.runInContext(`atual = registroTeste; conteudos = [atual]; servidorOnline = true; perfilFacebook = { id: 'pagina' }; conectarCampos();`, contexto);
+    stub('titulo').value = 'Republicação';
+    stub('titulo').oninput();
+    assert.equal(stub('publicar-agora-revisao').disabled, false);
+    assert.equal(contexto.registroTeste.titulo, 'Anterior');
+    assert.equal(contexto.registroTeste.statusPublicacao, 'publicado');
+    assert.equal(vm.runInContext('conteudos.length', contexto), 2);
+    const id = vm.runInContext('atual.id', contexto);
+    stub('titulo').value = 'Republicação nova';
+    stub('titulo').oninput();
+    assert.equal(vm.runInContext('atual.id', contexto), id);
+    stub('legenda').value = 'Texto alterado';
+    stub('legenda').oninput();
+    assert.equal(stub('publicar-agora-revisao').disabled, true);
+    assert.equal(stub('aprovar').disabled, false);
+    vm.runInContext('clearTimeout(temporizador)', contexto);
+});
+
 test('destinos são independentes: Feed e Story de cada rede', () => {
     assert.deepEqual(IR.destinosPublicacao({ publicarInstagram: false, publicarFacebook: true, publicarStory: true, publicarFacebookStory: true }),
         { instagram: false, facebook: true, instagramStory: true, facebookStory: true });
@@ -87,6 +124,7 @@ function ambiente() {
     };
     const contexto = {
         console, crypto: globalThis.crypto, URL, URLSearchParams, Intl, Date, JSON, Math, Object, Array, Promise, Number, String, Boolean, Set, Map, Error, RegExp, structuredClone,
+        Option: function (text, value) { this.text = text; this.value = value; },
         setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
         fetch: async () => new Response('{}'),
         location: { pathname: '/painel/', origin: 'http://127.0.0.1:8080', search: '' },
@@ -110,6 +148,21 @@ function ambiente() {
     for (const arquivo of arquivos) vm.runInContext(fs.readFileSync(path.join(raiz, arquivo), 'utf8'), contexto, { filename: arquivo });
     return { contexto, stub };
 }
+
+test('selecionar templates preenche todos os campos e limpa dados ausentes do anterior', () => {
+    const { contexto, stub } = ambiente();
+    vm.runInContext(`
+        preencherFormularioTemplate({ id: 'a', nome: 'A', objetivo: 'Objetivo A', fatosIa: 'Análise A', textoMidia: 'Texto A', local: 'Local A', site: 'https://a.example', site1: 'https://a.example/1', linksAdicionais: 'https://a.example/x', hashtagsPublicacao: '#a' });
+        preencherFormularioTemplate({ id: 'b', nome: 'B', objetivo: 'Objetivo B' });
+    `, contexto);
+    assert.equal(stub('objetivo').value, 'Objetivo B');
+    for (const id of ['fatosIa', 'textoMidia', 'local', 'site', 'site1', 'site2', 'maps', 'links-adicionais', 'informacoes-fixas', 'chamadas-fixas', 'hashtags', 'hashtags-padrao']) assert.equal(stub(id).value, '', `${id} não deve vazar do template anterior`);
+    const template = contexto.templateDoFormulario();
+    assert.equal(template.nome, 'B');
+    assert.equal(template.objetivo, 'Objetivo B');
+    assert.equal(template.fatosIa, '');
+    assert.equal(template.textoMidia, '');
+});
 
 test('render habilita o botão quando as conexões estão verificadas (sem reload)', () => {
     const { contexto, stub } = ambiente();
@@ -210,4 +263,32 @@ test('edição após confirmação invalida a publicação', () => {
     assert.equal(stub('preparar-publicacao').disabled, false);
     vm.runInContext(`atual.legenda = 'Editado depois'; atual.estado = 'rascunho'; renderizarRevisao();`, contexto);
     assert.equal(stub('preparar-publicacao').disabled, true, 'edição invalida a confirmação anterior');
+});
+
+test('registro publicado explica o bloqueio na Revisão e não permite envio duplicado', () => {
+    const { contexto, stub } = ambiente();
+    contexto.registroTeste = publicacao({ publicarFacebook: true, statusPublicacao: 'publicado' });
+    vm.runInContext(`atual = registroTeste; servidorOnline = true; perfilFacebook = { id: 'pagina' }; renderizarRevisao();`, contexto);
+    assert.equal(stub('aprovar').textContent, 'Conteúdo já confirmado');
+    assert.equal(stub('aprovar').disabled, true);
+    assert.equal(stub('decisao-publicacao').hidden, false);
+    assert.equal(stub('publicar-agora-revisao').disabled, true);
+    assert.match(stub('titulo-decisao-publicacao').textContent, /evitar duplicação/);
+    assert.match(stub('motivo-publicacao-revisao').textContent, /já publicado/);
+});
+
+test('atualização parcial do checklist mantém ações e motivos sincronizados', () => {
+    const { contexto, stub } = ambiente();
+    contexto.registroTeste = publicacao({ publicarFacebook: true, ideias: 'Conferir', revisoes: [] });
+    vm.runInContext(`atual = registroTeste; servidorOnline = true; perfilFacebook = { id: 'pagina' }; atualizarChecklist();`, contexto);
+    assert.equal(stub('publicar-agora-revisao').disabled, true);
+    assert.match(stub('motivo-publicacao-revisao').textContent, /Conferir/);
+    vm.runInContext(`atual.revisoes = ['Conferir']; atualizarChecklist();`, contexto);
+    assert.equal(stub('publicar-agora-revisao').disabled, false);
+    assert.equal(stub('preparar-publicacao').disabled, false);
+    assert.equal(stub('aprovar').textContent, 'Conteúdo já confirmado');
+    assert.match(stub('motivo-publicacao-revisao').textContent, /Nenhuma publicação foi iniciada/);
+    vm.runInContext(`perfilFacebook = undefined; atualizarChecklist();`, contexto);
+    assert.equal(stub('publicar-agora-revisao').disabled, true);
+    assert.match(stub('motivo-publicacao-revisao').textContent, /Página Facebook verificada/);
 });

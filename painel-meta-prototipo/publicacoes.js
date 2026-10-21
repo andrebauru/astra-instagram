@@ -211,6 +211,19 @@ function validarEtapa(etapa, publicacao, { midiaPublicaPronta = false, errosDeCo
     return erros;
 }
 
-const Publicacoes = { migrarPublicacao, normalizarTipoMidia, definirTipoMidia, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo, podeIniciarPublicacao, iniciarTentativa, registrarPublicacao, statusPublicacaoVisual, proximaEtapa, validarEtapa, ETAPAS };
+/** Cria outra identidade de envio, preservando o conteúdo e o registro original. */
+function reutilizarPublicacao(origem) {
+    const nova = structuredClone(origem);
+    nova.id = globalThis.crypto.randomUUID();
+    nova.origemPublicacaoId = origem.id;
+    nova.criadaEm = nova.atualizadoEm = new Date().toISOString();
+    nova.statusPublicacao = 'nao_publicada';
+    nova.resultadosPublicacao = {};
+    nova.tentativasPublicacao = [];
+    for (const campo of ['instagramMediaId', 'permalink', 'publicadoEm', 'erroPublicacao', 'containerPublicacaoId', 'containerStoryId', 'estadoContainerPublicacao', 'publicacaoReal']) nova[campo] = null;
+    return nova;
+}
+
+const Publicacoes = { reutilizarPublicacao, migrarPublicacao, normalizarTipoMidia, definirTipoMidia, estadoPublicacao, registrarUrlPublica, sincronizarUrlPublicaNoCampo, podeIniciarPublicacao, iniciarTentativa, registrarPublicacao, statusPublicacaoVisual, proximaEtapa, validarEtapa, ETAPAS };
 if (typeof module !== 'undefined') module.exports = Publicacoes;
 else globalThis.Publicacoes = Publicacoes;
