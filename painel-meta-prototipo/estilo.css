@@ -23,6 +23,10 @@ h3{font-size:15px;margin:18px 0 10px}
 .pendente{color:#9a582c}
 .conexao{display:flex;justify-content:space-between;align-items:center;gap:16px;background:#fff;border:1px solid var(--borda);border-radius:10px;padding:16px 20px;margin-bottom:20px;font-size:13px;flex-wrap:wrap}
 .conexao p{margin:6px 0 0}
+.etapas-conexao{list-style:none;padding:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:16px 0}
+.etapas-conexao li{border:1px solid var(--borda);border-radius:8px;padding:9px;background:#f8faf8;display:grid;gap:3px;min-width:0}
+.etapas-conexao strong{font-size:12px}.etapas-conexao span{font-size:11px;color:var(--muted)}
+.etapas-conexao li.concluida{border-color:#86b598;background:#edf7ef}.etapas-conexao li.atual{border-color:var(--verde);box-shadow:inset 0 0 0 1px var(--verde)}
 .layout{display:grid;gap:18px}
 .cartao{background:#fff;border:1px solid var(--borda);border-radius:12px;padding:20px;box-shadow:0 4px 16px #233b3410}
 .cabecalho-mini{display:flex;gap:8px;font-size:14px;margin-bottom:8px}
@@ -45,6 +49,15 @@ legend{font-size:12px;padding:0 6px}
 .duas-colunas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .acoes{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .galeria{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+.cabecalho-biblioteca{display:flex;align-items:end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:18px}
+.cabecalho-biblioteca h3,.cabecalho-biblioteca p{margin:0 0 5px}
+.biblioteca-midias{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin:10px 0 18px}
+.midia-biblioteca{border:1px solid var(--borda);border-radius:9px;padding:9px;display:grid;grid-template-columns:72px minmax(0,1fr);gap:9px;min-width:0;background:#fbfdfb}
+.midia-biblioteca img,.midia-biblioteca video{width:72px;height:72px;object-fit:cover;border-radius:6px;background:#edf1ed}
+.midia-biblioteca-conteudo{min-width:0;display:grid;gap:3px;align-content:start}
+.midia-biblioteca-conteudo strong,.midia-url{overflow-wrap:anywhere;word-break:break-word}
+.midia-biblioteca .acoes{grid-column:1/-1}
+.midia-biblioteca .acoes button,.midia-biblioteca .acoes a{font-size:11px;padding:6px 8px}
 .foto{border:1px solid var(--borda);border-radius:8px;overflow:hidden;margin:0}
 .foto img,.foto video{width:100%;aspect-ratio:1;object-fit:cover;display:block}
 .foto figcaption{padding:8px;font-size:11px;overflow-wrap:anywhere}
@@ -98,4 +111,5 @@ section[role=tabpanel]{padding:20px;min-height:320px}
 #meta-diagnostico{white-space:pre-wrap;overflow-wrap:anywhere}
 #metricas-tabela .agenda-item,#desempenho-resumo .agenda-item{border-top:1px solid var(--borda);padding:8px 0;font-size:13px;overflow-wrap:anywhere}
 @media(max-width:1000px){.layout-editor{grid-template-columns:1fr}.publicacoes-anteriores{position:static;max-height:none}.publicacoes-anteriores #anteriores-lista{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:760px){.duas-colunas{grid-template-columns:1fr}.marca small,.divisor{display:none}.plano-item{grid-template-columns:1fr}.modelo-controles{flex-direction:column;align-items:stretch}.abas button{padding:10px 8px;font-size:12px}.publicacoes-anteriores{padding:12px}.publicacoes-anteriores #anteriores-lista{display:flex;overflow-x:auto;gap:10px;padding:2px 1px 8px;scroll-snap-type:x mandatory}.publicacoes-anteriores .cartao-anterior{grid-template-columns:78px minmax(140px,1fr);flex:0 0 min(86vw,330px);scroll-snap-align:start}.miniatura-anterior{width:78px;height:78px}}
+@media(max-width:760px){.duas-colunas{grid-template-columns:1fr}.marca small,.divisor{display:none}.plano-item{grid-template-columns:1fr}.modelo-controles{flex-direction:column;align-items:stretch}.abas button{padding:10px 8px;font-size:12px}.publicacoes-anteriores{padding:12px}.publicacoes-anteriores #anteriores-lista{display:flex;overflow-x:auto;gap:10px;padding:2px 1px 8px;scroll-snap-type:x mandatory}.publicacoes-anteriores .cartao-anterior{grid-template-columns:78px minmax(140px,1fr);flex:0 0 min(86vw,330px);scroll-snap-align:start}.miniatura-anterior{width:78px;height:78px}.biblioteca-midias{grid-template-columns:1fr}.cabecalho-biblioteca .acoes button{flex:1}}
+@media(max-width:760px){.etapas-conexao{grid-template-columns:1fr 1fr}.etapas-conexao li:last-child{grid-column:1/-1}}

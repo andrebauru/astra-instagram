@@ -403,6 +403,71 @@ function renderizarMidias() {
     });
 }
 
+/** Renderiza o catálogo local/remoto com ações explícitas e URLs legíveis. */
+function renderizarBibliotecaMidias() {
+    const container = $('biblioteca-midias');
+    if (!container) return;
+    container.replaceChildren();
+    const publicas = bibliotecaMidias.filter(midia => urlPublicaDaMidia(midia));
+    $('copiar-todas-urls').disabled = publicas.length === 0;
+    $('biblioteca-midias-status').textContent = bibliotecaMidias.length
+        ? `${bibliotecaMidias.length} mídia(s) disponíveis · ${publicas.length} com URL pública.`
+        : 'Nenhuma mídia na biblioteca. Envie um arquivo ou sincronize o inventário remoto.';
+    for (const midia of bibliotecaMidias) {
+        const cartao = elemento('article', undefined, 'midia-biblioteca');
+        const visual = elemento(midia.tipo === 'video' ? 'video' : 'img');
+        visual.src = midia.miniatura || midia.dados || urlPublicaDaMidia(midia);
+        visual.alt = midia.nome || 'Mídia';
+        if (midia.tipo === 'video') { visual.muted = true; visual.preload = 'metadata'; }
+        const conteudo = elemento('div', undefined, 'midia-biblioteca-conteudo');
+        conteudo.append(elemento('strong', midia.nome || 'Mídia sem nome'));
+        const data = midia.criadaEm || midia.verified_at || midia.verificadaEm;
+        conteudo.append(elemento('small', `${midia.tipo || 'mídia'}${data ? ' · ' + new Date(data).toLocaleString('pt-BR') : ''}`));
+        const url = urlPublicaDaMidia(midia);
+        conteudo.append(elemento('span', url || 'Sem URL pública', 'midia-url nota'));
+        const acoes = elemento('div', undefined, 'acoes');
+        const usar = elemento('button', 'Usar na publicação'); usar.type = 'button'; usar.onclick = () => { prepararReutilizacao(); atual.imagens.push({ ...midia }); IR.sincronizarUrlsPublicas(atual); marcarAlterado(); sincronizarCampos(); renderizarMidias(); renderizarRevisao(); };
+        acoes.append(usar);
+        if (url) {
+            const copiar = elemento('button', 'Copiar URL'); copiar.type = 'button'; copiar.onclick = async () => { await navigator.clipboard.writeText(url); avisar('URL copiada.'); };
+            const abrir = elemento('a', 'Abrir'); abrir.href = url; abrir.target = '_blank'; abrir.rel = 'noopener noreferrer';
+            acoes.append(copiar, abrir);
+        }
+        cartao.append(visual, conteudo, acoes); container.append(cartao);
+    }
+}
+
+/** Persiste no backend somente metadados reutilizáveis da biblioteca. */
+async function salvarBibliotecaMidiasBackend() {
+    try { await cliente.solicitar('/media/biblioteca', { midias: bibliotecaMidias }, { prazo: 15000 }); }
+    catch { /* O cache local continua disponível quando o backend está offline. */ }
+}
+
+/** Mescla inventário persistido com o cache deste navegador sem apagar previews locais. */
+async function carregarBibliotecaMidiasBackend() {
+    try {
+        const resposta = await cliente.solicitar('/media/biblioteca', undefined, { prazo: 10000 });
+        const porUrl = new Map(bibliotecaMidias.filter(item => urlPublicaDaMidia(item)).map(item => [urlPublicaDaMidia(item), item]));
+        const semUrl = bibliotecaMidias.filter(item => !urlPublicaDaMidia(item));
+        for (const item of resposta.midias || []) porUrl.set(urlPublicaDaMidia(item), { ...item, ...(porUrl.get(urlPublicaDaMidia(item)) || {}) });
+        bibliotecaMidias = [...semUrl, ...porUrl.values()].slice(-500);
+    } catch { /* A biblioteca local permanece utilizável. */ }
+    renderizarBibliotecaMidias();
+}
+
+/** Solicita ao backend toda a paginação remota e mantém o catálogo anterior em falhas. */
+async function sincronizarBibliotecaMidias() {
+    const botao = $('sincronizar-midias'); botao.disabled = true; botao.textContent = 'Sincronizando…';
+    try {
+        const resposta = await cliente.solicitar('/media/sincronizar', {}, { prazo: 120000 });
+        bibliotecaMidias = resposta.midias || bibliotecaMidias;
+        await salvarArmazenamento('biblioteca-midias', bibliotecaMidias);
+        renderizarBibliotecaMidias();
+        avisar(`${resposta.totalRemoto} item(ns) conferidos; ${resposta.total} mídia(s) na biblioteca.`);
+    } catch (erro) { $('biblioteca-midias-status').textContent = `Sincronização não concluída: ${erro.message} A biblioteca anterior foi preservada.`; }
+    finally { botao.disabled = false; botao.textContent = 'Sincronizar mídias'; }
+}
+
 /** Envia uma mídia, sincroniza estado e campo visual (re-localiza pelo ID). */
 async function enviarMidia(midia, botao) {
     if (midia.tipo === 'video' && !IR.arquivoReelMp4(midia)) { avisar('Reels exigem arquivo .mp4 com MIME video/mp4.'); return; }
@@ -419,6 +484,8 @@ async function enviarMidia(midia, botao) {
         marcarAlterado();
         if (conteudo === atual) { sincronizarCampos(); renderizarMidias(); renderizarRevisao(); }
         await salvar(true);
+        await salvarBibliotecaMidiasBackend();
+        renderizarBibliotecaMidias();
         avisar(`✓ ${midia.tipo === 'video' ? 'Vídeo MP4' : 'Imagem'} enviado. URL pública preenchida.`);
     } catch (erro) {
         midia.statusUpload = 'pendente'; renderizarMidias();
@@ -439,6 +506,7 @@ async function processarArquivos(arquivos) {
     if (!lidas.length) { avisar(falhas.length ? 'Nenhum arquivo válido foi adicionado.' : 'Nenhum arquivo selecionado.'); return; }
     if (acao !== 'distribuir') prepararReutilizacao();
     bibliotecaMidias.push(...lidas); bibliotecaMidias = bibliotecaMidias.slice(-200);
+    renderizarBibliotecaMidias();
     if (acao === 'carrossel') {
         atual.tipoMidia = 'carrossel'; atual.imagens = [...atual.imagens, ...lidas];
     } else if (acao === 'distribuir') {
@@ -1318,6 +1386,12 @@ function conectarCampos() {
     $('reescrever-legenda').onclick = () => gerarLegenda(true);
     $('analisar-midia').onclick = analisarMidia;
     $('atualizar-modelos').onclick = () => carregarModelos(true);
+    $('sincronizar-midias').onclick = sincronizarBibliotecaMidias;
+    $('copiar-todas-urls').onclick = async () => {
+        const urls = [...new Set(bibliotecaMidias.map(urlPublicaDaMidia).filter(Boolean))];
+        if (!urls.length) return;
+        await navigator.clipboard.writeText(urls.join('\n')); avisar(`${urls.length} URL(s) copiadas.`);
+    };
     $('modelo-astra').onchange = () => { atual.modeloAstra = $('modelo-astra').value; marcarAlterado(); mostrarModeloSelecionado(); };
     $('revisar').onclick = marcarRevisaoHumana;
     $('aprovar').onclick = async () => {
@@ -1383,6 +1457,8 @@ async function iniciar() {
         const planoSalvo = await lerArmazenamento('plano-periodo-rascunho');
         if (planoSalvo?.id && Array.isArray(planoSalvo.itens)) planoPeriodo = planoSalvo;
     } catch { avisar('Armazenamento local indisponível.'); }
+    renderizarBibliotecaMidias();
+    await carregarBibliotecaMidiasBackend();
     try { const config = await cliente.solicitar('/empresa/template-padrao', undefined, { prazo: 10000 }); if (config?.templatePadrao) templatePadrao = config.templatePadrao; } catch { /* offline */ }
     await carregarRecorrentes();
     if (!atual.templateTexto && templatePadrao.texto) atual.templateTexto = templatePadrao.texto;

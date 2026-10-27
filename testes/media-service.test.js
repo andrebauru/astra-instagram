@@ -10,11 +10,38 @@ const MP4 = `data:video/mp4;base64,${Buffer.concat([Buffer.from([0, 0, 0, 24]), 
 function criarServico(comportamento) {
     const fetchImpl = async (url, opcoes = {}) => comportamento(String(url), opcoes);
     return criarMediaService({
-        midia: { uploadUrl: 'https://storage.exemplo-publico.com/upload', uploadKey: 'chave-ficticia' },
+        midia: { uploadUrl: 'https://storage.exemplo-publico.com/upload', inventarioUrl: 'https://storage.exemplo-publico.com/inventario', basePublicaUrl: 'https://cdn.dominio-publico.com/media/', uploadKey: 'chave-ficticia' },
         fetchImpl,
         resolverIPs: async () => ['8.8.8.8']
     });
 }
+
+test('inventário percorre todas as páginas com autenticação backend', async () => {
+    const chamadas = [];
+    const servico = criarServico((url, opcoes) => {
+        chamadas.push({ url, chave: opcoes.headers?.['X-Astra-Key'] });
+        const cursor = new URL(url).searchParams.get('cursor');
+        return new Response(JSON.stringify(cursor ? {
+            items: [{ url: 'https://cdn.dominio-publico.com/media/b.mp4', filename: 'b.mp4', mime: 'video/mp4' }], next_cursor: null
+        } : {
+            items: [{ url: 'https://cdn.dominio-publico.com/media/a.png', filename: 'a.png', mime: 'image/png' }], next_cursor: '1'
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const itens = await servico.listarInventario();
+    assert.deepEqual(itens.map(item => item.filename), ['a.png', 'b.mp4']);
+    assert.equal(chamadas.length, 2);
+    assert.ok(chamadas.every(item => item.chave === 'chave-ficticia'));
+});
+
+test('inventário recusa URL fora da base pública autorizada', async () => {
+    const servico = criarServico(() => new Response(JSON.stringify({ items: [{ url: 'https://externo.example/x.png' }], next_cursor: null }), { status: 200 }));
+    await assert.rejects(servico.listarInventario(), /fora da base pública autorizada/);
+});
+
+test('inventário indisponível falha sem fabricar catálogo', async () => {
+    const servico = criarMediaService({ midia: { uploadUrl: 'https://storage.example/upload', uploadKey: 'x' } });
+    await assert.rejects(servico.listarInventario(), erro => erro.code === 'MIDIA_INVENTARIO_NAO_CONFIGURADO');
+});
 
 test('envia imagem válida e devolve URL HTTPS pública verificada', async () => {
     const servico = criarServico((url, opcoes) => {

@@ -59,8 +59,18 @@ publicar/agendar.
 
 A API do Instagram precisa de uma URL HTTPS pública. O MediaService envia a
 imagem ao storage configurado e valida a URL. Caminhos locais são recusados.
-Variáveis: `MEDIA_UPLOAD_URL`, `MEDIA_UPLOAD_KEY`, `MEDIA_PUBLIC_BASE_URL`,
+Variáveis: `MEDIA_UPLOAD_URL`, `MEDIA_INVENTORY_URL`, `MEDIA_UPLOAD_KEY`, `MEDIA_PUBLIC_BASE_URL`,
 `MEDIA_PUBLIC_VERIFY_TIMEOUT_MS`.
+
+O botão **Sincronizar mídias** consulta um inventário autenticado pelo backend,
+percorre todas as páginas e mescla as URLs sem apagar nomes ou outros metadados
+já salvos. A base histórica continua sendo
+`https://quimbanda.jp/astra/media/public/`. O arquivo opcional
+`inventario-midias.php` é fornecido para hospedagens sem endpoint de listagem;
+ele não é instalado automaticamente. No servidor, configure `ASTRA_MEDIA_KEY`,
+`ASTRA_MEDIA_DIR` e `ASTRA_MEDIA_PUBLIC_BASE`, publique o arquivo ao lado do
+fluxo de upload e informe sua URL HTTPS em `MEDIA_INVENTORY_URL`. A pasta lida
+fica restrita a `ASTRA_MEDIA_DIR`; a chave permanece somente no backend.
 
 ## Agendamentos
 
@@ -115,7 +125,7 @@ INSTAGRAM_ACCESS_TOKEN, INSTAGRAM_ACCOUNT_ID
 META_APP_ID, FACEBOOK_PAGE_ID, FACEBOOK_PAGE_ACCESS_TOKEN
 OPENROUTER_API_KEY, OPENROUTER_MODEL (ou ASTRA_MODEL)
 PORT, META_GRAPH_BASE_URL, META_GRAPH_VERSION
-MEDIA_UPLOAD_URL, MEDIA_UPLOAD_KEY, MEDIA_PUBLIC_BASE_URL, MEDIA_PUBLIC_VERIFY_TIMEOUT_MS
+MEDIA_UPLOAD_URL, MEDIA_INVENTORY_URL, MEDIA_UPLOAD_KEY, MEDIA_PUBLIC_BASE_URL, MEDIA_PUBLIC_VERIFY_TIMEOUT_MS
 ```
 
 Timezone padrão: `Asia/Tokyo`. Tokens e chaves nunca são retornados pelo servidor.

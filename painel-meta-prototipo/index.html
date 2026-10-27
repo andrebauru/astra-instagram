@@ -87,6 +87,11 @@
         </label>
         <label class="upload"><span class="upload-icone">＋</span><strong>Selecionar imagens e vídeos</strong><span>JPEG, PNG, WebP ou MP4 · até 256 MB por arquivo · preview local · envio manual por arquivo</span><input id="arquivos" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,.mp4" multiple></label>
         <div id="progresso-upload" class="lista-status" aria-live="polite"></div>
+        <div class="cabecalho-biblioteca">
+          <div><h3>Biblioteca de mídias</h3><p id="biblioteca-midias-status" class="nota" role="status">Carregando biblioteca…</p></div>
+          <div class="acoes"><button id="sincronizar-midias" type="button">Sincronizar mídias</button><button id="copiar-todas-urls" type="button">Copiar todas as URLs</button></div>
+        </div>
+        <div id="biblioteca-midias" class="biblioteca-midias"></div>
         <h3>URLs públicas das mídias</h3>
         <ul id="urls-publicas-midias"></ul>
         <div id="galeria" class="galeria"></div>
@@ -271,7 +276,14 @@
   <div class="cabecalho"><div><p class="eyebrow">SUPORTE</p><h1>Configurações</h1></div></div>
   <article class="cartao" aria-labelledby="meta-titulo">
     <h2 id="meta-titulo">Conexão guiada com Facebook</h2>
-    <p class="nota">1. Configure o aplicativo uma vez abaixo. 2. Autorize na Meta. 3. Escolha sua Página. A conexão Instagram existente será preservada.</p>
+    <p class="nota">O uso diário não pede senha nem token: a autorização acontece na página oficial da Meta. A configuração técnica fica no cartão separado abaixo.</p>
+    <ol class="etapas-conexao" aria-label="Etapas da conexão">
+      <li id="meta-etapa-conta"><strong>1. Conta Meta</strong><span>Abra a autorização oficial.</span></li>
+      <li id="meta-etapa-autorizar"><strong>2. Autorizar</strong><span>Confirme as permissões solicitadas.</span></li>
+      <li id="meta-etapa-escolher"><strong>3. Página e Instagram</strong><span>Escolha uma Página autorizada.</span></li>
+      <li id="meta-etapa-verificar"><strong>4. Verificar</strong><span>Confirme o estado antes de publicar.</span></li>
+      <li id="meta-etapa-finalizar"><strong>5. Finalizar</strong><span>Identidade conectada e pronta.</span></li>
+    </ol>
     <div class="acoes">
       <button id="meta-conectar" type="button" class="primario">Conectar com Facebook</button>
       <button id="meta-verificar" type="button">Verificar conexão e permissões</button>
@@ -289,7 +301,7 @@
     </details>
   </article>
   <article class="cartao">
-    <h2>Integrações Meta e OpenRouter</h2>
+    <h2>Administração técnica · Meta e OpenRouter</h2>
     <p class="nota">Configuração inicial do aplicativo e OpenRouter. Segredos ficam criptografados no backend, nunca são devolvidos ao navegador. Vazio mantém o valor atual. O .env não será alterado.</p>
     <form id="form-integracoes">
       <label>Meta App ID<input id="config-META_APP_ID" inputmode="numeric" autocomplete="off"></label>

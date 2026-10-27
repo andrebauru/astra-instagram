@@ -27,7 +27,7 @@ function lerInteiro(valor, padrao) {
 
 const config = {
     porta: lerInteiro(process.env.PORT, 8080),
-    build: process.env.ASTRA_BUILD_ID || 'astra-instagram-1.1.0',
+    build: process.env.ASTRA_BUILD_ID || 'astra-instagram-1.2.0',
 
     instagram: Object.freeze({
         token: process.env.INSTAGRAM_ACCESS_TOKEN || '',
@@ -48,6 +48,7 @@ const config = {
 
     midia: Object.freeze({
         uploadUrl: process.env.MEDIA_UPLOAD_URL || '',
+        inventarioUrl: process.env.MEDIA_INVENTORY_URL || '',
         uploadKey: process.env.MEDIA_UPLOAD_KEY || '',
         basePublicaUrl: process.env.MEDIA_PUBLIC_BASE_URL || '',
         verificacaoTimeoutMs: lerInteiro(process.env.MEDIA_PUBLIC_VERIFY_TIMEOUT_MS, 30000),
@@ -62,7 +63,8 @@ const config = {
         publicacoes: process.env.ASTRA_PUBLICACOES_ARQUIVO || path.join(RAIZ, 'dados', 'publicacoes.json'),
         publicacoesMeta: process.env.ASTRA_PUBLICACOES_META_ARQUIVO || path.join(RAIZ, 'dados', 'publicacoes-meta.json'),
         agendador: process.env.ASTRA_AGENDADOR_ARQUIVO || path.join(RAIZ, 'dados', 'agendamentos.json'),
-        metricas: process.env.ASTRA_METRICAS_ARQUIVO || path.join(RAIZ, 'dados', 'metricas-organicas.json')
+        metricas: process.env.ASTRA_METRICAS_ARQUIVO || path.join(RAIZ, 'dados', 'metricas-organicas.json'),
+        bibliotecaMidias: process.env.ASTRA_MIDIAS_ARQUIVO || path.join(RAIZ, 'dados', 'biblioteca-midias.json')
     })
 };
 

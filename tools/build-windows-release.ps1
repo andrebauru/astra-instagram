@@ -1,5 +1,5 @@
 param(
-    [string]$Versao = '1.1.0',
+    [string]$Versao = '1.2.0',
     [string]$Destino = ''
 )
 
@@ -28,7 +28,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $staging 'runtime') | Out-N
 $arquivosRaiz = @(
     '.env.example', 'package.json', 'iniciar.js', 'server.js', 'bridge-seguranca.js',
     'encerramento-servidor.js', 'diagnostico.js', 'midia-publica.js',
-    'modelos-astra.js', 'astra-visao.js', 'rede-publica.js'
+    'modelos-astra.js', 'astra-visao.js', 'rede-publica.js', 'inventario-midias.php'
 )
 foreach ($arquivo in $arquivosRaiz) {
     Copy-Item -LiteralPath (Join-Path $raiz $arquivo) -Destination $staging

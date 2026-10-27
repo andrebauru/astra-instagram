@@ -35,6 +35,7 @@ const { criarStoreEmpresa } = require('./services/empresa-store');
 const { criarStorePublicacoesMeta } = require('./services/publicacao-meta-store');
 const { criarStoreTemplates } = require('./services/templates-store');
 const { criarStorePublicacoes } = require('./services/publicacoes-store');
+const { criarStoreBibliotecaMidias, reconciliarMidias } = require('./services/biblioteca-midias-store');
 const { criarLogsService } = require('./services/logs-service');
 
 // Correlaciona operações disparadas por uma requisição sem gravar conteúdo.
@@ -48,6 +49,7 @@ const storeEmpresa = criarStoreEmpresa(config.arquivos.empresa);
 const storePublicacoesMeta = criarStorePublicacoesMeta(config.arquivos.publicacoesMeta);
 const storeTemplates = criarStoreTemplates(config.arquivos.templates);
 const storePublicacoes = criarStorePublicacoes(config.arquivos.publicacoes);
+const storeBibliotecaMidias = criarStoreBibliotecaMidias(config.arquivos.bibliotecaMidias);
 const logs = criarLogsService({ diretorio: process.env.ASTRA_LOGS_DIR || path.join(path.dirname(config.arquivos.empresa), 'logs') });
 /** Atalho de logging que nunca lança. */
 const registrarLog = entrada => logs.registrar(entrada);
@@ -583,6 +585,25 @@ async function tratarRequisicao(req, res) {
             } catch (erro) {
                 throw erroSeguro(erro.code || 'MIDIA_UPLOAD_FALHOU', erro.message || 'Não foi possível armazenar a imagem.', erro.status || 500);
             }
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/media/biblioteca') {
+            sendJSON(res, 200, { success: true, midias: storeBibliotecaMidias.listar() });
+            return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/media/biblioteca') {
+            const body = await readJSONBody(req);
+            sendJSON(res, 200, { success: true, midias: storeBibliotecaMidias.salvar(body.midias) });
+            return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/media/sincronizar') {
+            const remotas = await mediaService.listarInventario();
+            const existentes = storeBibliotecaMidias.listar();
+            const midias = storeBibliotecaMidias.salvar(reconciliarMidias(existentes, remotas));
+            sendJSON(res, 200, { success: true, midias, totalRemoto: remotas.length, total: midias.length });
             return;
         }
 

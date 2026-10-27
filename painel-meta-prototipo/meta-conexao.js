@@ -16,6 +16,14 @@
         }
         el('meta-configuracao-pendente').textContent = configurado ? '' : conexao.errosConfiguracao ? 'Confira os campos indicados abaixo e clique em Salvar integrações. Não é necessário copiar tokens do Facebook.' : `Configuração inicial necessária: ${(conexao.pendenciasConfiguracao || ['complete os campos do aplicativo abaixo']).join(', ')}. Preencha e clique em Salvar integrações. Não é necessário copiar tokens do Facebook.`;
         const etapa = conexao.etapa || conexao.estado;
+        const ordem = ['meta-etapa-conta', 'meta-etapa-autorizar', 'meta-etapa-escolher', 'meta-etapa-verificar', 'meta-etapa-finalizar'];
+        const indiceAtual = !conexao.configurado ? 0 : conexao.estado === 'desconectado' ? 1 : conexao.pagina?.id ? (conexao.estado === 'conectado' ? 4 : 3) : 2;
+        ordem.forEach((id, indice) => {
+            const item = el(id);
+            if (!item?.classList) return;
+            item.classList.toggle('concluida', indice < indiceAtual || (indice === 4 && conexao.estado === 'conectado'));
+            item.classList.toggle('atual', indice === indiceAtual && conexao.estado !== 'conectado');
+        });
         const rotulo = { nao_configurado: 'Não configurado', pronto_para_autorizar: 'Pronto para autorizar', conectado: 'Conectado', token_expirado: 'Autorização expirada ou revogada', erro_api: 'Erro na verificação' }[etapa] || etapa.replaceAll('_', ' ');
         el('meta-estado').textContent = erro || `${rotulo} · ${conexao.mensagem}${conexao.expiraEm ? ' · token expira em ' + new Date(conexao.expiraEm).toLocaleString('pt-BR') : ''}`;
         el('meta-conectar').disabled = !conexao.configurado || ocupado;
