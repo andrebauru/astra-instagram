@@ -56,6 +56,8 @@ test('backup autentica senha e conteúdo sem revelar credenciais no envelope', a
     await assert.rejects(backup.importar({ ...arquivo, tag: Buffer.alloc(16).toString('base64') }, senha));
     await assert.rejects(backup.importar({ ...arquivo, formato: 'outro' }, senha));
     await assert.rejects(backup.exportar(entrada, 'curta'));
+    await assert.rejects(backup.exportar(entrada, '1234567'));
+    assert.deepEqual(await backup.importar(await backup.exportar(entrada, '12345678'), '12345678'), entrada);
     assert.notEqual((await backup.exportar(entrada, senha)).dados, arquivo.dados);
 });
 

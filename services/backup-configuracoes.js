@@ -6,7 +6,7 @@ const { erroSeguro } = require('../bridge-seguranca');
 
 /** Deriva a chave sem guardar a senha; parâmetros fixos impedem arquivos abusivos. */
 async function chave(senha, salt) {
-    if (typeof senha !== 'string' || senha.length < 12 || senha.length > 256) throw erroSeguro('BACKUP_INVALIDO', 'Use uma senha entre 12 e 256 caracteres.', 400);
+    if (typeof senha !== 'string' || senha.length < 8 || senha.length > 256) throw erroSeguro('BACKUP_INVALIDO', 'Use uma senha entre 8 e 256 caracteres.', 400);
     return scrypt(senha, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
 }
 

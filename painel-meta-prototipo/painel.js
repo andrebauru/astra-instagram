@@ -1317,7 +1317,7 @@ function ctxMidias() { return Fluxo.prepararMidiasParaAgenda(atual?.imagens || [
 /** Transfere somente o envelope criptografado; não persiste a senha no navegador. */
 async function transferirConfiguracoes(importar) {
     const status = $('backup-status'), campo = $('backup-senha');
-    if (campo.value.length < 12) { status.textContent = 'Informe uma senha com pelo menos 12 caracteres.'; return; }
+    if (campo.value.length < 8) { status.textContent = 'Informe uma senha com pelo menos 8 caracteres.'; return; }
     if (importar && !confirm('Substituir as integrações presentes no backup? Projetos e agendamentos não serão importados. Pode ser necessário reconectar a Meta.')) return;
     $('backup-exportar').disabled = $('backup-importar').disabled = true;
     try {
@@ -1334,7 +1334,12 @@ async function transferirConfiguracoes(importar) {
             document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
         status.textContent = importar ? 'Integrações importadas. Recarregue o painel e confira as conexões antes de publicar.' : 'Backup criptografado exportado. Guarde a senha separadamente.';
-    } catch { status.textContent = 'Não foi possível concluir. Confira o arquivo, a senha e a conexão com o servidor.'; }
+    } catch (erro) {
+        status.textContent = erro.status === 404 ? 'O servidor aberto ainda não tem a função de backup. Pare e inicie novamente o servidor atualizado e recarregue o painel.'
+            : erro.status === 403 ? 'A sessão local expirou. Recarregue o painel e tente novamente.'
+            : erro.status === 409 ? 'Há uma operação em andamento. Aguarde sua conclusão antes de transferir configurações.'
+            : 'Não foi possível concluir. Confira o arquivo, a senha e a conexão com o servidor.';
+    }
     finally { campo.value = ''; $('backup-arquivo').value = ''; $('backup-exportar').disabled = $('backup-importar').disabled = false; }
 }
 

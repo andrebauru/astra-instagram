@@ -168,7 +168,7 @@ Consulte [docs/MODELOS-ASTRA.md](docs/MODELOS-ASTRA.md) para a seleção de mode
 
 ## Backup portátil das integrações
 
-Em Configurações, use **Exportar configurações** com uma senha de pelo menos 12 caracteres. O arquivo `.astra-backup` usa AES-256-GCM e chave derivada por scrypt; guarde a senha separadamente. Não há recuperação de senha.
+Em Configurações, use **Exportar configurações** com uma senha de pelo menos 8 caracteres (prefira uma senha longa e exclusiva). O arquivo `.astra-backup` usa AES-256-GCM e chave derivada por scrypt; guarde a senha separadamente. Não há recuperação de senha.
 
 Use **Importar configurações** na instalação de destino, selecione o arquivo e informe a mesma senha. A importação atualiza as integrações presentes no arquivo; campos ausentes são preservados. Confira as conexões antes de publicar. Sessões OAuth não são transferidas e a Meta pode exigir nova autorização.
 
