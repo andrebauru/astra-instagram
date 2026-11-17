@@ -319,11 +319,14 @@ function novaPublicacao() {
     marcarAlterado(); sincronizarCampos(); renderizarMidias(); renderizarRevisao(); atualizarSeletorConteudos(); abrirAba('midia');
 }
 
+/** Ordena o seletor por criação sem alterar a coleção nem a seleção em edição. */
 function atualizarSeletorConteudos() {
     const seletor = $('conteudo-atual');
     if (!seletor) return;
     seletor.replaceChildren();
-    conteudos.forEach((c, indice) => { const o = elemento('option', c.titulo || `Publicação ${indice + 1}`); o.value = c.id; seletor.append(o); });
+    conteudos.map((c, indice) => ({ c, indice, criadaEm: Date.parse(c.criadaEm) || 0 }))
+        .sort((a, b) => b.criadaEm - a.criadaEm || b.indice - a.indice)
+        .forEach(({ c, indice }) => { const o = elemento('option', c.titulo || `Publicação ${indice + 1}`); o.value = c.id; seletor.append(o); });
     seletor.value = atual.id;
 }
 
@@ -534,6 +537,10 @@ async function processarArquivos(arquivos) {
 // ============================================================
 
 function sincronizarCampos() {
+    if ($('validade-tipo')) $('validade-tipo').value = atual.validadeConteudo?.tipo || '';
+    if ($('validade-ate')) $('validade-ate').value = atual.validadeConteudo?.validoAte || '';
+    if ($('validade-evento')) $('validade-evento').value = atual.validadeConteudo?.dataEvento || '';
+    if ($('validade-status')) $('validade-status').textContent = atual.validadeConteudo?.assinatura === PS.assinaturaRevisao(atual) ? 'Revisão salva. A validade será conferida novamente no horário do envio.' : 'Revisão pendente ou conteúdo alterado: confirme as datas antes de agendar.';
     $('tipoMidia').value = atual.tipoMidia;
     for (const campo of ['objetivo', 'tema', 'fatos', 'contexto', 'fatosIa', 'textoMidia', 'hashtags', 'palavras', 'ideias', 'imagemUrl', 'videoUrl', 'legenda']) if ($(campo)) $(campo).value = atual[campo] || '';
     for (const [id, campo] of [['local', 'local'], ['site', 'site'], ['site1', 'site1'], ['site2', 'site2'], ['maps', 'maps'], ['links-adicionais', 'linksAdicionais'], ['hashtags-padrao', 'hashtags'], ['informacoes-fixas', 'informacoesAdicionais'], ['chamadas-fixas', 'chamadasFixas']]) if ($(id)) $(id).value = atual[campo] || '';
@@ -564,6 +571,7 @@ function atualizarControlesStory() {
     const habilitado = business && !carrossel;
     if ($('publicar-story')) $('publicar-story').disabled = !habilitado;
     if ($('periodo-story')) $('periodo-story').disabled = !business;
+    if ($('periodo-facebook-story')) $('periodo-facebook-story').disabled = !perfilFacebook;
     // Story do Facebook é independente do Story do Instagram e do Feed.
     if ($('publicar-facebook-story')) $('publicar-facebook-story').disabled = !perfilFacebook || carrossel;
     if ($('facebook-story-explicacao')) $('facebook-story-explicacao').textContent = carrossel ? 'Story Facebook exige uma única imagem ou vídeo.' : perfilFacebook ? 'Destino independente do Feed Facebook e do Instagram.' : 'Conecte e verifique a Página Facebook para selecionar Stories.';
@@ -934,8 +942,36 @@ async function verificarInstagram() {
 
 function montarEntradaPublicacao() {
     if (atual.tipoMidia === 'carrossel') return { formato: 'carrossel', itens: atual.imagens.map(item => ({ tipo: item.tipo, url: urlPublicaDaMidia(item) })), caption: R.compor(atual), publicarStory: false };
-    if (atual.tipoMidia === 'reel') return { formato: 'reel', videoUrl: atual.videoUrl.trim(), mediaMime: 'video/mp4', caption: R.compor(atual), publicarStory: atual.publicarStory === true };
+    if (atual.tipoMidia === 'reel') return { formato: 'reel', videoUrl: atual.videoUrl.trim(), duracaoSegundos: atual.duracaoVideo?.url === atual.videoUrl.trim() ? atual.duracaoVideo.segundos : null, mediaMime: 'video/mp4', caption: R.compor(atual), publicarStory: atual.publicarStory === true };
     return { formato: 'imagem', imageUrl: atual.imagemUrl.trim(), caption: R.compor(atual), publicarStory: atual.publicarStory === true };
+}
+
+/** Mede metadados no navegador sem enviar o vídeo ou iniciar uma publicação. */
+async function medirDuracaoVideo() {
+    const url = String(atual.videoUrl || '').trim();
+    if (!url.startsWith('https://')) { avisar('Informe e salve a URL HTTPS pública do vídeo primeiro.'); return; }
+    const conteudo = atual;
+    const botao = $('video-medir'); botao.disabled = true;
+    const video = document.createElement('video'); video.preload = 'metadata';
+    try {
+        const segundos = await new Promise((resolve, reject) => {
+            const prazo = setTimeout(() => finalizar(new Error('Não foi possível medir em 15 segundos. Confira a URL.')), 15000);
+            /** Encerra a leitura sem deixar listeners ou temporizadores ativos. */
+            function finalizar(erro) {
+                clearTimeout(prazo); video.onloadedmetadata = null; video.onerror = null;
+                erro ? reject(erro) : resolve(video.duration);
+            }
+            video.onloadedmetadata = () => finalizar(Number.isFinite(video.duration) && video.duration > 0 ? null : new Error('Duração indisponível.'));
+            video.onerror = () => finalizar(new Error('O navegador não conseguiu ler o vídeo; a agenda continuará bloqueada.'));
+            video.src = url;
+        });
+        if (atual !== conteudo || String(atual.videoUrl || '').trim() !== url) throw new Error('A mídia mudou durante a medição. Meça novamente.');
+        atual.duracaoVideo = { url, segundos };
+        marcarAlterado(); await salvar(true);
+        const validacao = PS.avaliarDuracaoReel({ tipo: 'video', duracaoSegundos: segundos }, ['Instagram Feed']);
+        $('video-duracao-status').textContent = `${segundos.toFixed(2)} segundos. ${validacao.elegivel ? 'Duração compatível com Reels.' : validacao.motivo}`;
+    } catch (erro) { avisar(erro.message); }
+    finally { video.removeAttribute('src'); video.load(); botao.disabled = false; }
 }
 
 function renderizarStatusPublicacao() {
@@ -1229,10 +1265,11 @@ function lerConfigPeriodo() {
     const varMode = document.querySelector('input[name=periodo-var]:checked')?.value || 'nao';
     const modo = $('periodo-modo').value;
     return {
-        id: planoPeriodo?.id || `periodo-${crypto.randomUUID()}`,
+        id: `periodo-${crypto.randomUUID()}`,
         nome: `Plano ${$('periodo-inicio').value}–${$('periodo-fim').value}`,
         inicio: $('periodo-inicio').value,
         fim: $('periodo-fim').value,
+        prazoMaximoAgendamento: $('periodo-prazo-maximo').value,
         timezone: $('periodo-timezone').value || 'Asia/Tokyo',
         quantidade: modo === 'total' ? Number($('periodo-quantidade').value) : 0,
         porDia: modo === 'porDia' ? Number($('periodo-por-dia').value) : 0,
@@ -1244,19 +1281,23 @@ function lerConfigPeriodo() {
         variarTexto: varMode === 'ia',
         nivelVariacao: $('periodo-nivel').value,
         permitirReutilizacao: $('periodo-reutilizar').checked === true,
+        exigirRevisaoTemporal: true,
         tipos: ['imagem', 'video', 'carrossel'],
-        destinos: [...($('periodo-instagram').checked ? ['Instagram Feed', ...($('periodo-story').checked ? ['Instagram Story'] : [])] : []), ...($('periodo-facebook').checked ? ['Facebook Page'] : [])],
-        facebookPageId: $('periodo-facebook').checked ? perfilFacebook?.id || null : null,
+        destinos: [...($('periodo-instagram').checked ? ['Instagram Feed'] : []), ...($('periodo-story').checked ? ['Instagram Story'] : []), ...($('periodo-facebook').checked ? ['Facebook Page'] : []), ...($('periodo-facebook-story')?.checked ? ['Facebook Story'] : [])],
+        facebookPageId: $('periodo-facebook').checked || $('periodo-facebook-story')?.checked ? perfilFacebook?.id || null : null,
         atraso: 'reagendar', toleranciaMinutos: 30
     };
 }
 
 async function gerarPeriodo() {
     const config = lerConfigPeriodo();
+    if (!PS.dataValida(config.prazoMaximoAgendamento)) { avisar('Informe o prazo máximo do agendamento.'); return; }
     if (!config.destinos.length) { avisar('Escolha ao menos um destino para a agenda.'); return; }
-    if (config.destinos.includes('Facebook Page') && !config.facebookPageId) { avisar('Conecte e selecione a Página do Facebook antes de gerar o plano.'); return; }
+    if (config.destinos.some(d => d.startsWith('Facebook')) && !config.facebookPageId) { avisar('Conecte e selecione a Página do Facebook antes de gerar o plano.'); return; }
+    const midiasRevisadas = revisarMidiasDoPeriodo(config);
+    if (!midiasRevisadas) return;
     const melhoresHorarios = (analiseAtual?.melhoresHorarios || []).length ? analiseAtual.melhoresHorarios : (await analisarHorarios())?.melhoresHorarios || [];
-    const plano = PS.planejarPeriodo(config, ctxMidias(), { melhoresHorarios });
+    const plano = PS.planejarPeriodo(config, midiasRevisadas, { melhoresHorarios });
     plano.sincronizacao = { estado: 'rascunho_local', confirmadoEm: null, erro: null };
     planoPeriodo = plano;
     selecionadosPeriodo = new Set(plano.itens.map(i => i.id));
@@ -1270,7 +1311,50 @@ async function gerarPeriodo() {
     $('periodo-status').className = plano.erros.length ? 'pendente' : 'ok';
 }
 
-function ctxMidias() { return Fluxo.prepararMidiasParaAgenda(globalThis.AstraContexto?.obterMidias?.() || bibliotecaMidias, conteudos); }
+/** O plano usa exclusivamente as mídias vinculadas ao projeto em edição. */
+function ctxMidias() { return Fluxo.prepararMidiasParaAgenda(atual?.imagens || [], atual ? [atual] : []); }
+
+/** Transfere somente o envelope criptografado; não persiste a senha no navegador. */
+async function transferirConfiguracoes(importar) {
+    const status = $('backup-status'), campo = $('backup-senha');
+    if (campo.value.length < 12) { status.textContent = 'Informe uma senha com pelo menos 12 caracteres.'; return; }
+    if (importar && !confirm('Substituir as integrações presentes no backup? Projetos e agendamentos não serão importados. Pode ser necessário reconectar a Meta.')) return;
+    $('backup-exportar').disabled = $('backup-importar').disabled = true;
+    try {
+        let arquivo;
+        if (importar) {
+            const selecionado = $('backup-arquivo').files[0];
+            if (!selecionado || selecionado.size > 250000) throw new Error('Selecione um backup de até 250 KB.');
+            arquivo = JSON.parse(await selecionado.text());
+        }
+        const resposta = await cliente.solicitar(importar ? '/config/importar' : '/config/exportar', { senha: campo.value, ...(importar ? { arquivo } : {}) }, { prazo: 20000 });
+        if (!importar) {
+            const url = URL.createObjectURL(new Blob([JSON.stringify(resposta.arquivo)], { type: 'application/octet-stream' }));
+            const link = document.createElement('a'); link.href = url; link.download = 'integracoes.astra-backup';
+            document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        status.textContent = importar ? 'Integrações importadas. Recarregue o painel e confira as conexões antes de publicar.' : 'Backup criptografado exportado. Guarde a senha separadamente.';
+    } catch { status.textContent = 'Não foi possível concluir. Confira o arquivo, a senha e a conexão com o servidor.'; }
+    finally { campo.value = ''; $('backup-arquivo').value = ''; $('backup-exportar').disabled = $('backup-importar').disabled = false; }
+}
+
+/** Confirma cada mídia sem revisão nesta geração, sem liberar planos anteriores. */
+function revisarMidiasDoPeriodo(config) {
+    const resultado = [];
+    for (const midia of ctxMidias()) {
+        if (midia.validadeConteudo || midia.status === 'utilizada') { resultado.push(midia); continue; }
+        const origem = conteudos.find(c => c.id === midia.publicacaoId);
+        const anterior = origem?.validadeConteudo;
+        const dataEvento = prompt(`Revisão da mídia: ${origem?.titulo || midia.id}\n${String(midia.legenda || '').slice(0, 180)}\nConfira a arte. Informe a data do evento (AAAA-MM-DD), ou deixe vazio se não há evento. Cancelar interrompe a geração.`, anterior?.dataEvento || '');
+        if (dataEvento === null) return null;
+        if (dataEvento && !PS.dataValida(dataEvento)) { avisar('Data do evento inválida. Nenhum novo plano foi gerado.'); return null; }
+        if (!confirm(`Confirma que conferiu esta mídia e suas datas?\nÚltimo dia permitido: ${config.prazoMaximoAgendamento}.\n${dataEvento ? 'Evento: ' + dataEvento + '. O limite será no máximo o dia anterior.' : 'Sem evento informado. Não confirme se a arte anuncia evento antigo.'}\nCancelar deixa esta mídia fora do plano.`)) continue;
+        const limites = [config.prazoMaximoAgendamento, anterior?.validoAte, anterior?.dataEvento ? PS.diaAnteriorEvento(anterior.dataEvento) : null, dataEvento ? PS.diaAnteriorEvento(dataEvento) : null].filter(Boolean).sort();
+        resultado.push({ ...midia, validadeConteudo: { tipo: 'evento', validoAte: limites[0], ...(dataEvento ? { dataEvento } : {}), assinatura: PS.assinaturaRevisao(midia) } });
+    }
+    if (!resultado.length) { avisar('Nenhuma mídia revisada para gerar o plano.'); return null; }
+    return resultado;
+}
 
 function renderizarPeriodoPrevia() {
     const container = $('periodo-previa'); container.replaceChildren();
@@ -1288,8 +1372,9 @@ function renderizarPeriodoPrevia() {
         linha.append(elemento('div', `${item.data} ${item.hora} · ${item.tipo} · ${item.status} · v${item.versao}${item.variarTexto ? ' · variação ' + item.nivelVariacao : ''}${sincronizacao}`));
         linha.append(elemento('p', trecho(item.legenda) || '(legenda vazia)', 'nota'));
         linha.append(elemento('p', `Destinos: ${(item.destinos || []).join(', ')}`, 'nota'));
+        linha.append(elemento('p', `Último dia permitido: ${PS.avaliarPrazo(item).limite || 'não informado'}${item.validadeConteudo?.dataEvento ? ' · Evento: ' + item.validadeConteudo.dataEvento : ''}`, 'nota'));
         const story = document.createElement('input'); story.type = 'checkbox'; story.checked = item.destinos?.includes('Instagram Story');
-        story.disabled = !item.destinos?.includes('Instagram Feed') || item.tipo === 'carrossel' || String(perfilInstagram?.account_type || '').toUpperCase() !== 'BUSINESS' || planoPeriodo.sincronizacao?.estado === 'confirmado_servidor';
+        story.disabled = item.tipo === 'carrossel' || String(perfilInstagram?.account_type || '').toUpperCase() !== 'BUSINESS' || planoPeriodo.sincronizacao?.estado === 'confirmado_servidor';
         story.onchange = async () => {
             item.destinos = story.checked ? [...new Set([...(item.destinos || []), 'Instagram Story'])] : (item.destinos || []).filter(destino => destino !== 'Instagram Story');
             item.approvalSignature = null; item.status = 'rascunho'; planoPeriodo.status = 'rascunho'; planoPeriodo.sincronizacao = { estado: 'rascunho_local', erro: null };
@@ -1320,6 +1405,9 @@ async function aplicarVariacoes(plano) {
 async function confirmarPeriodo() {
     if (!planoPeriodo || !planoPeriodo.itens.length) { avisar('Gere o agendamento antes de confirmar.'); return; }
     if (planoPeriodo.sincronizacao?.estado === 'sincronizando' || planoPeriodo.sincronizacao?.estado === 'confirmado_servidor') return;
+    const destinos = [...new Set(planoPeriodo.itens.flatMap(item => item.destinos || []))];
+    if (!destinos.length) { avisar('Escolha ao menos um destino e gere novamente o plano.'); return; }
+    if (!confirm(`Agendar ${planoPeriodo.itens.length} item(ns) para: ${destinos.join(' + ')}?\nPágina Facebook: ${destinos.some(d => d.startsWith('Facebook')) ? perfilFacebook?.name || planoPeriodo.config?.facebookPageId || 'conferir na configuração' : 'NÃO selecionada'}.\nRevise na prévia os destinos de cada item. Redes não selecionadas NÃO receberão publicações.`)) return;
     const botao = $('periodo-confirmar'); botao.disabled = true; botao.textContent = planoPeriodo.itens.some(item => item.variarTexto && !item.variacaoConcluida) ? 'Gerando variações…' : 'Sincronizando…';
     $('periodo-status').textContent = botao.textContent; $('periodo-status').className = 'nota';
     try {
@@ -1380,8 +1468,30 @@ function conectarCampos() {
     };
     $('form-integracoes').onsubmit = salvarIntegracoes;
     $('testar-facebook').onclick = testarFacebook;
+    $('backup-exportar').onclick = () => transferirConfiguracoes(false);
+    $('backup-importar').onclick = () => transferirConfiguracoes(true);
     $('usar-visao').onchange = () => { atual.usarVisao = $('usar-visao').checked; marcarAlterado(); };
     $('arquivos').onchange = async event => { const arquivos = [...event.target.files]; event.target.value = ''; event.target.disabled = true; try { await processarArquivos(arquivos); } finally { event.target.disabled = false; } };
+    $('validade-revisar').onclick = async () => {
+        const revisao = { tipo: $('validade-tipo').value, validoAte: $('validade-ate').value || null };
+        if (revisao.tipo === 'evento') {
+            const dataEvento = $('validade-evento').value;
+            const anterior = PS.diaAnteriorEvento(dataEvento);
+            if (!anterior) { avisar('Informe a data completa do evento.'); return; }
+            revisao.dataEvento = dataEvento;
+            revisao.validoAte = revisao.validoAte && revisao.validoAte < anterior ? revisao.validoAte : anterior;
+        }
+        const resultado = PS.avaliarValidade({ validadeConteudo: revisao });
+        if (!resultado.elegivel) { avisar(resultado.motivo); return; }
+        atual.validadeConteudo = { ...revisao, assinatura: PS.assinaturaRevisao(atual) };
+        marcarAlterado(); await salvar(true); sincronizarCampos();
+    };
+    $('video-medir').onclick = medirDuracaoVideo;
+    $('validade-evento').onchange = () => {
+        const limite = PS.diaAnteriorEvento($('validade-evento').value);
+        $('validade-ate').max = limite || '';
+        if (limite) $('validade-ate').value = limite;
+    };
     $('gerar-legenda').onclick = () => gerarLegenda(false);
     $('reescrever-legenda').onclick = () => gerarLegenda(true);
     $('analisar-midia').onclick = analisarMidia;
@@ -1476,6 +1586,21 @@ async function iniciar() {
     restaurarDatasPeriodo();
     window.iniciarDiagnostico?.((rota, corpo, opcoes) => cliente.solicitar(rota, corpo, opcoes));
     await verificarServidor();
+    if (planoPeriodo?.sincronizacao?.estado === 'confirmado_servidor') {
+        try {
+            const resposta = await cliente.solicitar('/agenda/planos', undefined, { prazo: 10000 });
+            const remoto = resposta.planos?.find(p => p.id === planoPeriodo.id);
+            if (!remoto || remoto.status === 'cancelado') {
+                $('periodo-status').textContent = 'Este plano não está ativo na agenda do servidor. Gere um novo plano e confira datas e destinos antes de confirmar. Nenhum envio foi reativado.';
+                $('periodo-status').className = 'pendente';
+                $('periodo-confirmar').disabled = true;
+                $('periodo-confirmar').textContent = 'Gere um novo plano';
+            }
+        } catch {
+            $('periodo-status').textContent = 'Não foi possível conferir este plano no servidor. A confirmação salva no navegador não comprova que ele está agendado.';
+            $('periodo-status').className = 'pendente';
+        }
+    }
     const rascunhosNoServidor = await carregarRascunhosBackend();
     $('salvamento').textContent = rascunhosNoServidor ? 'Rascunhos sincronizados com o servidor' : 'Somente neste navegador · servidor indisponível';
     await carregarBibliotecaTemplates();

@@ -37,6 +37,9 @@ const { criarStoreTemplates } = require('./services/templates-store');
 const { criarStorePublicacoes } = require('./services/publicacoes-store');
 const { criarStoreBibliotecaMidias, reconciliarMidias } = require('./services/biblioteca-midias-store');
 const { criarLogsService } = require('./services/logs-service');
+const { instalarDataHoraConsole } = require('./services/console-data-hora');
+
+instalarDataHoraConsole({ timezone: config.timezone });
 
 // Correlaciona operações disparadas por uma requisição sem gravar conteúdo.
 const contextoOperacao = new AsyncLocalStorage();
@@ -89,12 +92,14 @@ let insightsService = instagramService
 // O scheduler reutiliza o adaptador único do SchedulerService, que chama
 // InstagramService.publish() exatamente como a publicação imediata.
 const publicadorAgenda = async (...args) => {
-    if (args[0].destino === 'Facebook Page') {
+    if (['Facebook Page', 'Facebook Story'].includes(args[0].destino)) {
         const { item } = args[0];
         if (!item.facebookPageId || item.facebookPageId !== config.facebook.pageId) throw erroSeguro('META_PAGINA_INVALIDA', 'A Página da agenda mudou. Revise e aprove novamente o plano.', 409);
         await metaConexao.verificar(); metaConexao.exigirPublicacao(config.facebook.pageId);
-        const entrada = { formato: item.tipo === 'video' ? 'reel' : item.tipo === 'carrossel' ? 'carrossel' : 'imagem', itens: item.itens, mediaUrl: item.url, caption: item.legenda || '' };
-        const resultado = await facebookService.publish(entrada, `agenda:${item.id}`);
+        const entrada = { formato: ['video', 'reel'].includes(item.tipo) ? 'reel' : item.tipo === 'carrossel' ? 'carrossel' : 'imagem', itens: item.itens, mediaUrl: item.url, caption: item.legenda || '' };
+        const resultado = args[0].destino === 'Facebook Story'
+            ? await facebookService.publicarStory(entrada, `agenda:${item.id}`)
+            : await facebookService.publish(entrada, `agenda:${item.id}`);
         return { id: resultado.mediaId };
     }
     if (!instagramService) throw erroSeguro('INSTAGRAM_NAO_CONFIGURADO', 'Instagram não configurado no servidor.', 503);
@@ -130,6 +135,7 @@ function atualizarIntegracoes() {
 }
 
 const schedulerService = criarMotor({
+    validarConteudo: (item, referencia) => require('./painel-meta-prototipo/planejamento-semanal').avaliarSegurancaAgenda(item, referencia),
     armazenamento: criarArmazenamentoArquivo(config.arquivos.agendador),
     publicador: publicadorAgenda,
     registrar: (secao, evento, dados) => diagnostico.registrar(secao, evento, dados)
@@ -221,8 +227,11 @@ function normalizarPlanoRecebido(plano = {}) {
             mediaId: typeof item.mediaId === 'string' ? item.mediaId.slice(0, 100) : null,
             tipo: ['imagem', 'video', 'carrossel'].includes(item.tipo) ? item.tipo : 'imagem',
             data: item.data, hora: item.hora,
+            validadeConteudo: item.validadeConteudo && typeof item.validadeConteudo === 'object' ? { tipo: item.validadeConteudo.tipo, validoAte: item.validadeConteudo.validoAte || null, ...(item.validadeConteudo.dataEvento ? { dataEvento: item.validadeConteudo.dataEvento } : {}), assinatura: item.validadeConteudo.assinatura } : null,
+            prazoMaximoAgendamento: typeof item.prazoMaximoAgendamento === 'string' ? item.prazoMaximoAgendamento : null,
+            duracaoSegundos: Number.isFinite(item.duracaoSegundos) ? item.duracaoSegundos : null,
             timezone: typeof item.timezone === 'string' ? item.timezone.slice(0, 60) : (typeof plano.timezone === 'string' ? plano.timezone.slice(0, 60) : null),
-            destinos: Array.isArray(item.destinos) ? item.destinos.filter(d => ['Instagram', 'Instagram Feed', 'Instagram Story', 'Facebook Page'].includes(d)) : ['Instagram Feed'],
+            destinos: Array.isArray(item.destinos) ? item.destinos.filter(d => ['Instagram', 'Instagram Feed', 'Instagram Story', 'Facebook Page', 'Facebook Story'].includes(d)) : ['Instagram Feed'],
             facebookPageId: typeof item.facebookPageId === 'string' && /^\d+$/.test(item.facebookPageId) ? item.facebookPageId : null,
             legenda: typeof item.legenda === 'string' ? item.legenda.slice(0, 5000) : '',
             status: typeof item.status === 'string' ? item.status.slice(0, 40) : 'rascunho',
@@ -307,7 +316,23 @@ async function tratarRequisicao(req, res) {
         if (req.method === 'POST' && !req.headers['content-type']?.toLowerCase().startsWith('application/json')) {
             throw erroSeguro('TIPO_INVALIDO', 'Envie a solicitação como application/json.', 415);
         }
-        if (req.method === 'POST' && (url.pathname.startsWith('/meta/oauth/') || url.pathname === '/config/integracoes')) sessoesLocais.exigir(req);
+        if (req.method === 'POST' && (url.pathname.startsWith('/meta/oauth/') || url.pathname.startsWith('/config/'))) sessoesLocais.exigir(req);
+        if (req.method === 'POST' && ['/config/exportar', '/config/importar'].includes(url.pathname)) {
+            exigirIntegracoesLivres();
+            const body = await readJSONBody(req);
+            const backup = require('./services/backup-configuracoes');
+            res.setHeader('Cache-Control', 'no-store');
+            if (url.pathname === '/config/exportar') {
+                sendJSON(res, 200, { success: true, arquivo: await backup.exportar(storeIntegracoes.paraBackup(), body.senha) });
+            } else {
+                const entrada = await backup.importar(body.arquivo, body.senha);
+                exigirIntegracoesLivres();
+                storeIntegracoes.salvar(entrada);
+                atualizarIntegracoes();
+                sendJSON(res, 200, { success: true });
+            }
+            return;
+        }
         if (req.method === 'POST' && url.pathname.startsWith('/meta/oauth/')) {
             exigirIntegracoesLivres();
             const body = await readJSONBody(req);
@@ -457,6 +482,10 @@ async function tratarRequisicao(req, res) {
             if (!enviarInstagram && !enviarFacebook && !enviarStoryInstagram && !enviarStoryFacebook) { registrarLog({ nivel: 'WARNING', modulo: 'PUBLISH', acao: 'publicar_agora_bloqueado', status: 'sem_destino', operationId: body.publicationId || ctxPublish.operationId, mensagem: 'Nenhum destino selecionado.' }); throw erroSeguro('DESTINO_OBRIGATORIO', 'Selecione ao menos um Feed ou Story.', 400); }
             if ((enviarInstagram || enviarStoryInstagram) && !instagramService) throw erroSeguro('INSTAGRAM_NAO_CONFIGURADO', 'Instagram não configurado no servidor.', 503);
             const formato = body.formato === 'reel' ? 'reel' : body.formato === 'carrossel' ? 'carrossel' : body.formato === 'story' ? 'story' : 'imagem';
+            if (enviarInstagram && formato === 'reel') {
+                const duracao = require('./painel-meta-prototipo/planejamento-semanal').avaliarDuracaoReel({ tipo: 'reel', duracaoSegundos: body.duracaoSegundos }, ['Instagram Feed']);
+                if (!duracao.elegivel) throw erroSeguro('REEL_DURACAO_INVALIDA', duracao.motivo, 400);
+            }
             if (body.caption !== undefined && typeof body.caption !== 'string') throw erroSeguro('LEGENDA_INVALIDA', 'A legenda deve ser um texto.', 400);
             const entrada = formato === 'carrossel'
                 ? { formato, itens: (Array.isArray(body.itens) ? body.itens : []).slice(0, 20), caption: body.caption || '' }
@@ -643,11 +672,24 @@ async function tratarRequisicao(req, res) {
         }
 
         if (req.method === 'POST' && url.pathname === '/agenda/executar') {
-            const resumo = await schedulerService.executarCiclo();
+            const body = await readJSONBody(req);
+            if (typeof body.planoId !== 'string' || !body.planoId) throw erroSeguro('PLANO_ID_INVALIDO', 'Escolha o plano que deseja executar.', 400);
+            const resumo = await schedulerService.executarPlano(body.planoId);
+            if (!resumo) throw erroSeguro('PLANO_NAO_ENCONTRADO', 'Plano não encontrado no servidor.', 404);
             sendJSON(res, 200, { success: true, ...resumo });
             return;
         }
 
+        if (req.method === 'POST' && ['/agenda/excluir-plano', '/agenda/excluir-item', '/agenda/cancelar-plano', '/agenda/cancelar-vencidos'].includes(url.pathname)) {
+            const body = await readJSONBody(req);
+            if (typeof body.planoId !== 'string' || !body.planoId) throw erroSeguro('PLANO_ID_INVALIDO', 'Informe o plano.', 400);
+            const resultado = url.pathname === '/agenda/excluir-plano' ? schedulerService.removerPlano(body.planoId)
+                : url.pathname === '/agenda/cancelar-plano' ? schedulerService.cancelarPlano(body.planoId)
+                : url.pathname === '/agenda/cancelar-vencidos' ? schedulerService.cancelarVencidos(body.planoId)
+                : schedulerService.removerItem(body.planoId, body.itemId);
+            if (!resultado) throw erroSeguro('PLANO_NAO_ENCONTRADO', 'Plano ou item não encontrado.', 404);
+            sendJSON(res, 200, { success: true, resultado }); return;
+        }
         if (req.method === 'POST' && ['/agenda/pausar', '/agenda/retomar', '/agenda/reagendar', '/agenda/cancelar'].includes(url.pathname)) {
             const body = await readJSONBody(req);
             if (typeof body.planoId !== 'string' || !body.planoId) throw erroSeguro('PLANO_ID_INVALIDO', 'Informe o identificador do plano.', 400);
@@ -734,6 +776,28 @@ async function tratarRequisicao(req, res) {
             return;
         }
 
+        if (req.method === 'GET' && url.pathname === '/publicacoes/historico') {
+            const historico = storePublicacoesMeta.listarHistorico();
+            for (const plano of schedulerService.listarPlanos(true)) for (const item of plano.itens || []) {
+                for (const [destino, resultado] of Object.entries(item.resultados || {})) {
+                    if (historico.some(r => r.idPublicado && r.idPublicado === resultado.idPublicado && r.destino === destino)) continue;
+                    historico.push({ chave: `resultado:${item.id}:${destino}`, destino, estado: resultado.estado, idPublicado: resultado.idPublicado || null, publicadoEm: resultado.finalizadoEm || resultado.iniciadoEm || null });
+                }
+            }
+            sendJSON(res, 200, { success: true, historico: historico.sort((a, b) => String(b.publicadoEm || '').localeCompare(String(a.publicadoEm || ''))) });
+            return;
+        }
+        if (req.method === 'GET' && url.pathname === '/publicacoes/link') {
+            const registro = storePublicacoesMeta.listarHistorico().find(r => r.chave === url.searchParams.get('chave'));
+            if (!registro?.idPublicado) throw erroSeguro('PUBLICACAO_NAO_ENCONTRADA', 'Não há recibo confirmado para consultar o link.', 404);
+            if (registro.permalink) { sendJSON(res, 200, { success: true, permalink: registro.permalink }); return; }
+            const servico = registro.destino.startsWith('Facebook') ? facebookService : instagramService;
+            if (!servico) throw erroSeguro('CONEXAO_NAO_CONFIGURADA', 'Conecte a conta para consultar o link.', 409);
+            const detalhe = await servico.detalheMidia(registro.idPublicado);
+            if (detalhe.permalink) storePublicacoesMeta.salvar(registro.chave, { permalink: detalhe.permalink });
+            sendJSON(res, 200, { success: true, permalink: detalhe.permalink || null });
+            return;
+        }
         if (req.method === 'GET' && url.pathname === '/publicacoes') {
             sendJSON(res, 200, { success: true, publicacoes: storePublicacoes.listar() });
             return;

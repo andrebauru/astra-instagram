@@ -1,5 +1,5 @@
 param(
-    [string]$Versao = '1.2.0',
+    [string]$Versao = '1.2.3',
     [string]$Destino = ''
 )
 
@@ -60,7 +60,11 @@ $readme = @"
 1. Extraia toda a pasta do pacote.
 2. Execute `Astra.exe`.
 3. Na primeira execução, o Astra cria `.env` ao lado do executável a partir de `.env.example`.
-4. Preencha as credenciais somente no `.env` local e reinicie o Astra.
+4. Abra Configurações, salve os dados do aplicativo Meta e use Conectar com Facebook para autorizar e selecionar a Página. O pacote não contém credenciais.
+5. Na agenda, marque explicitamente Facebook e/ou Stories, gere a prévia e confirme os destinos. Planos antigos não recebem novos destinos automaticamente.
+6. Use Histórico de publicações para consultar recibos e links. Stories podem expirar ou não fornecer link.
+7. Antes de gerar a agenda, revise no Editor a validade de cada conteúdo e as datas na arte. Eventos vencidos e itens sem revisão ficam bloqueados, inclusive planos antigos. Para Reels Instagram, use Medir duração do vídeo (3 a 900 segundos).
+8. Informe a data do evento: o limite será o dia anterior. Preencha também Prazo máximo do agendamento. O menor limite prevalece; após ele, envios pendentes são cancelados. Cancelar/excluir na agenda não apaga publicações nas redes. Exclusões preservam registros locais e não podem ser desfeitas pelo painel.
 
 O `.env` existente nunca é substituído. Não compartilhe esse arquivo. O pacote contém o runtime Node.js $versaoNode x64 e não exige uma instalação de Node no computador.
 

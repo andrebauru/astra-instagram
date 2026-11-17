@@ -225,7 +225,7 @@ function motorComPublicador(contador, agoraMs = Date.parse('2026-10-12T00:00:00Z
     return criarMotor({ armazenamento: criarArmazenamentoMemoria(), publicador: async () => { contador.chamadas += 1; return { id: `pub-${contador.chamadas}` }; }, agora: () => agoraMs + contador.chamadas });
 }
 
-test('pausar impede, retomar publica sem duplicar, cancelar e reagendar funcionam', async () => {
+test('pausar e retomar não publicam vencidos sem executar o plano', async () => {
     const plano = PS.aprovar(PS.planejarPeriodo(configPeriodo({ quantidade: 3, atraso: 'publicar' }), [midia('a'), midia('b'), midia('c')], { melhoresHorarios: [{ hora: '12:00' }], agoraMs: AGORA }));
     const contador = { chamadas: 0 };
     const motor = motorComPublicador(contador);
@@ -235,16 +235,18 @@ test('pausar impede, retomar publica sem duplicar, cancelar e reagendar funciona
     assert.equal(contador.chamadas, 0);
     motor.retomarPlano(plano.id);
     await motor.executarCiclo();
-    assert.equal(contador.chamadas, 2, 'somente os dois itens já vencidos são publicados');
+    assert.equal(contador.chamadas, 0, 'itens vencidos não são publicados automaticamente');
+    await motor.executarPlano(plano.id);
+    assert.equal(contador.chamadas, 2, 'a ação explícita executa somente os itens vencidos do plano');
     await motor.executarCiclo();
     assert.equal(contador.chamadas, 2, 'item publicado não duplica');
     motor.cancelarItem(plano.id, plano.itens[2].id);
     assert.equal(motor.listarPlanos()[0].itens[2].status, 'cancelado');
     motor.reagendarItem(plano.id, plano.itens[2].id);
-    assert.equal(motor.listarPlanos()[0].itens[2].status, 'rascunho', 'item cancelado volta a rascunho para nova aprovação');
+    assert.equal(motor.listarPlanos()[0].itens[2].status, 'cancelado', 'cancelamento não é desfeito por reagendamento; crie um novo item');
 });
 
-test('reinício preserva o plano em arquivo', async () => {
+test('reinício preserva vencido sem publicar até execução explícita', async () => {
     const caminho = path.join(os.tmpdir(), `astra-plano-restart-${process.pid}.json`);
     try { fs.rmSync(caminho, { force: true }); } catch { /* inexistente */ }
     const plano = PS.aprovar(PS.planejarPeriodo(configPeriodo({ quantidade: 1, atraso: 'publicar' }), [midia('a')], { melhoresHorarios: [{ hora: '12:00' }], agoraMs: AGORA }));
@@ -253,11 +255,17 @@ test('reinício preserva o plano em arquivo', async () => {
     motor1.sincronizarPlanos([plano]);
     await motor1.executarCiclo();
 
-    const motor2 = criarMotor({ armazenamento, publicador: async () => ({ id: 'pub-2' }), agora: () => Date.parse('2026-10-10T12:15:00Z') });
+    let chamadas = 0;
+    const motor2 = criarMotor({ armazenamento, publicador: async () => { chamadas++; return { id: 'pub-2' }; }, agora: () => Date.parse('2026-10-10T12:15:00Z') });
     const relido = motor2.listarPlanos();
     assert.equal(relido.length, 1);
     assert.equal(relido[0].id, plano.id);
-    assert.equal(relido[0].itens[0].status, 'confirmada');
+    assert.equal(relido[0].itens[0].status, 'vencido');
+    await motor2.executarCiclo();
+    assert.equal(chamadas, 0);
+    await motor2.executarPlano(plano.id);
+    assert.equal(chamadas, 1);
+    assert.equal(motor2.listarPlanos()[0].itens[0].status, 'confirmada');
     try { fs.rmSync(caminho, { force: true }); } catch { /* melhor esforço */ }
 });
 

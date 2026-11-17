@@ -34,7 +34,17 @@ function criarStorePublicacoesMeta(caminho) {
         return dados[publicacaoId];
     }
 
-    return { obter, salvar };
+    /** Expõe somente recibos públicos, nunca estado de upload ou credenciais. */
+    function listarHistorico() {
+        return Object.entries(lerTudo()).filter(([, e]) => e.mediaId || e.incerto).map(([chave, e]) => ({
+            chave, idPublicado: e.mediaId || null,
+            destino: chave.endsWith(':facebook-story') ? 'Facebook Story' : chave.endsWith(':facebook') ? 'Facebook Page' : chave.endsWith(':story') || chave.endsWith(':Instagram Story') || e.formato === 'story' ? 'Instagram Story' : 'Instagram Feed',
+            estado: e.mediaId ? 'confirmada' : 'incerto',
+            publicadoEm: e.publicadoEm || e.atualizadoEm || null,
+            permalink: typeof e.permalink === 'string' && /^https:\/\/(?:[a-z0-9-]+\.)*(?:facebook\.com|instagram\.com)\//i.test(e.permalink) ? e.permalink : null
+        }));
+    }
+    return { obter, salvar, listarHistorico };
 }
 
 module.exports = { criarStorePublicacoesMeta };

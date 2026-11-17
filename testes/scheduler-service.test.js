@@ -6,6 +6,163 @@ const { criarMotor, criarArmazenamentoMemoria } = require('../services/scheduler
 
 const INSTANTE_10H_TOKYO = Date.parse('2026-09-28T01:00:00Z');
 
+test('evento dia 7 limita ao dia 6 e cobre viradas de mês, ano e ano bissexto', () => {
+    assert.equal(PS.diaAnteriorEvento('2026-11-07'), '2026-11-06');
+    assert.equal(PS.diaAnteriorEvento('2026-01-01'), '2025-12-31');
+    assert.equal(PS.diaAnteriorEvento('2028-03-01'), '2028-02-29');
+    assert.equal(PS.diaAnteriorEvento('2026-02-30'), null);
+    const item = { validadeConteudo: { tipo: 'evento', dataEvento: '2026-11-07', validoAte: '2026-11-10' } };
+    assert.equal(PS.avaliarPrazo(item, Date.parse('2026-11-06T14:59:59Z')).elegivel, true);
+    assert.equal(PS.avaliarPrazo(item, Date.parse('2026-11-06T15:00:00Z')).prazoExpirado, true);
+    assert.equal(PS.avaliarPrazo({ ...item, prazoMaximoAgendamento: '2026-11-04' }, Date.parse('2026-11-05T00:00:00Z')).limite, '2026-11-04');
+});
+
+test('prazo do plano impede geração posterior mesmo para mídia atemporal reutilizável', () => {
+    const plano = PS.planejarPeriodo({ id: 'prazo', inicio: '2026-09-28', fim: '2026-10-03', prazoMaximoAgendamento: '2026-09-29', quantidade: 6, timezone: 'Asia/Tokyo', estrategiaHorario: 'manual', horarios: ['10:00'], permitirReutilizacao: true, exigirRevisaoTemporal: true, destinos: ['Facebook Page'] }, [midia('x', { validadeConteudo: { tipo: 'atemporal' } })], { agoraMs: Date.parse('2026-09-27T00:00:00Z') });
+    assert.equal(plano.itens.length, 2);
+    assert.ok(plano.itens.every(i => i.data <= '2026-09-29' && i.prazoMaximoAgendamento === '2026-09-29'));
+});
+
+test('prazo vencido cancela item pausado e execução manual não contorna a regra', async () => {
+    const plano = PS.planejar(config(), [midia('prazo')]);
+    plano.itens[0].prazoMaximoAgendamento = '2026-09-27';
+    const { publicador, chamadas } = publicadorFicticio();
+    const armazenamento = criarArmazenamentoMemoria();
+    const motor = criarMotor({ armazenamento, publicador, agora: () => INSTANTE_10H_TOKYO });
+    motor.sincronizarPlanos([PS.aprovar(plano)]); motor.pausarPlano(plano.id);
+    await motor.executarCiclo();
+    assert.equal(motor.listarPlanos()[0].status, 'cancelado');
+    await motor.executarPlano(plano.id);
+    assert.equal(chamadas.length, 0);
+    assert.equal(motor.retomarPlano(plano.id), null);
+    assert.equal(criarMotor({ armazenamento, publicador }).listarPlanos()[0].itens[0].status, 'cancelado');
+});
+
+test('exclusão é recuperável e sincronização antiga não ressuscita plano ou item', async () => {
+    const plano = PS.aprovar(PS.planejar(config(), [midia('excluir')]));
+    const { publicador, chamadas } = publicadorFicticio();
+    const motor = criarMotor({ armazenamento: criarArmazenamentoMemoria(), publicador, agora: () => INSTANTE_10H_TOKYO });
+    motor.sincronizarPlanos([plano]);
+    motor.removerItem(plano.id, plano.itens[0].id);
+    motor.sincronizarPlanos([{ ...plano, itens: [] }]);
+    motor.sincronizarPlanos([plano]);
+    assert.ok(motor.listarPlanos()[0].itens[0].excluidoEm);
+    motor.removerPlano(plano.id);
+    assert.equal(motor.listarPlanos().length, 0);
+    assert.equal(motor.listarPlanos(true).length, 1);
+    motor.sincronizarPlanos([plano]); await motor.executarPlano(plano.id);
+    assert.equal(motor.listarPlanos().length, 0);
+    assert.equal(chamadas.length, 0);
+});
+
+test('exclusão preserva recibos confirmados e recusa resultado incerto', async () => {
+    const plano = PS.aprovar(PS.planejar(config(), [midia('recibo')]));
+    const { publicador } = publicadorFicticio();
+    const motor = criarMotor({ armazenamento: criarArmazenamentoMemoria(), publicador, agora: () => INSTANTE_10H_TOKYO });
+    motor.sincronizarPlanos([plano]); await motor.executarPlano(plano.id);
+    motor.removerPlano(plano.id);
+    assert.equal(motor.listarPlanos(true)[0].itens[0].resultados['Instagram Feed'].idPublicado, 'publicado-1');
+    const incerto = criarMotor({ armazenamento: criarArmazenamentoMemoria(), publicador: async () => { throw Object.assign(new Error('sem confirmação'), { codigo: 'META_CONEXAO' }); }, agora: () => INSTANTE_10H_TOKYO });
+    incerto.sincronizarPlanos([plano]); await incerto.executarPlano(plano.id);
+    assert.throws(() => incerto.removerPlano(plano.id), { codigo: 'AGENDA_EM_USO' });
+    assert.throws(() => incerto.cancelarPlano(plano.id), { codigo: 'AGENDA_EM_USO' });
+});
+
+test('validade usa o dia do fuso, bloqueia evento vencido e não presume atemporal', () => {
+    assert.equal(PS.avaliarValidade({}, INSTANTE_10H_TOKYO).elegivel, false);
+    const item = { validadeConteudo: { tipo: 'evento', validoAte: '2026-09-28' } };
+    assert.equal(PS.avaliarValidade(item, Date.parse('2026-09-28T14:59:59Z')).elegivel, true);
+    assert.equal(PS.avaliarValidade(item, Date.parse('2026-09-28T15:00:00Z')).elegivel, false);
+    assert.equal(PS.avaliarValidade({ validadeConteudo: { tipo: 'evento', validoAte: '2026-02-30' } }).elegivel, false);
+    assert.equal(PS.avaliarValidade({ validadeConteudo: { tipo: 'atemporal' } }).elegivel, true);
+});
+
+test('Reels exigem duração conhecida de 3 a 900 segundos, sem impor intervalo entre posts', () => {
+    for (const segundos of [null, NaN, 0, 2.99, 900.01]) assert.equal(PS.avaliarDuracaoReel({ tipo: 'video', duracaoSegundos: segundos }, ['Instagram Feed']).elegivel, false);
+    for (const segundos of [3, 900]) assert.equal(PS.avaliarDuracaoReel({ tipo: 'video', duracaoSegundos: segundos }, ['Instagram Feed']).elegivel, true);
+    assert.equal(PS.avaliarDuracaoReel({ tipo: 'video' }, ['Facebook Page']).elegivel, true);
+});
+
+test('agenda não reutiliza evento depois da validade, mesmo com variação por IA', () => {
+    const cfg = { id: 'validade', inicio: '2026-09-28', fim: '2026-09-30', timezone: 'Asia/Tokyo', quantidade: 3, estrategiaHorario: 'manual', horarios: ['10:00'], intervaloMinimoHoras: 1, permitirReutilizacao: true, variarTexto: true, exigirRevisaoTemporal: true, destinos: ['Instagram Feed'] };
+    const evento = midia('evento', { validadeConteudo: { tipo: 'evento', validoAte: '2026-09-28' }, duracaoSegundos: 10 });
+    const plano = PS.planejarPeriodo(cfg, [evento], { agoraMs: Date.parse('2026-09-27T00:00:00Z') });
+    assert.equal(plano.itens.length, 1);
+    assert.equal(plano.itens[0].data, '2026-09-28');
+    assert.equal(plano.itens[0].validadeConteudo.validoAte, '2026-09-28');
+    assert.equal(plano.valido, false);
+    assert.equal(PS.planejarPeriodo(cfg, [midia('sem-revisao')], { agoraMs: Date.parse('2026-09-27T00:00:00Z') }).itens.length, 0);
+});
+
+test('execução bloqueia plano legado sem revisão e evento vencido sem chamar o provedor', async () => {
+    for (const validadeConteudo of [null, { tipo: 'evento', validoAte: '2026-09-27' }]) {
+        const plano = PS.planejar(config(), [midia('bloqueada')]);
+        Object.assign(plano.itens[0], { validadeConteudo, duracaoSegundos: 10 });
+        const { publicador, chamadas } = publicadorFicticio();
+        const motor = criarMotor({ armazenamento: criarArmazenamentoMemoria(), publicador, validarConteudo: PS.avaliarSegurancaAgenda, agora: () => INSTANTE_10H_TOKYO });
+        motor.sincronizarPlanos([PS.aprovar(plano)]);
+        await motor.executarCiclo();
+        assert.equal(chamadas.length, 0);
+        assert.equal(motor.listarPlanos()[0].itens[0].status, validadeConteudo ? 'cancelado' : 'bloqueado');
+    }
+});
+
+test('validade e duração fazem parte da aprovação e sobrevivem ao reinício', async () => {
+    const plano = PS.planejar(config(), [midia('revisada')]);
+    Object.assign(plano.itens[0], { validadeConteudo: { tipo: 'atemporal', validoAte: null, assinatura: 'revisao' }, duracaoSegundos: 10 });
+    const aprovado = PS.aprovar(plano);
+    const { aprovacaoValida } = require('../services/scheduler-service');
+    assert.equal(aprovacaoValida(aprovado.itens[0]), true);
+    assert.equal(aprovacaoValida({ ...aprovado.itens[0], duracaoSegundos: 2 }), false);
+    assert.equal(aprovacaoValida({ ...aprovado.itens[0], validadeConteudo: { tipo: 'evento', validoAte: '2026-10-01' } }), false);
+    const armazenamento = criarArmazenamentoMemoria();
+    const { publicador, chamadas } = publicadorFicticio();
+    criarMotor({ armazenamento, publicador }).sincronizarPlanos([aprovado]);
+    const motor = criarMotor({ armazenamento, publicador, validarConteudo: PS.avaliarSegurancaAgenda, agora: () => INSTANTE_10H_TOKYO });
+    await motor.executarCiclo();
+    assert.equal(chamadas.length, 1);
+});
+
+test('trocar texto ou mídia invalida a revisão antes de preparar a agenda', () => {
+    const { prepararMidiasParaAgenda } = require('../painel-meta-prototipo/fluxo-editorial');
+    const arquivo = { id: 'midia-revisada', tipo: 'video', urlPublica: 'https://exemplo.com/a.mp4' };
+    const conteudo = { id: 'conteudo', tipoMidia: 'reel', legenda: 'Evento em setembro', imagens: [arquivo] };
+    conteudo.validadeConteudo = { tipo: 'evento', validoAte: '2026-09-28', assinatura: PS.assinaturaRevisao(conteudo) };
+    assert.ok(prepararMidiasParaAgenda([arquivo], [conteudo])[0].validadeConteudo);
+    assert.equal(prepararMidiasParaAgenda([arquivo], [{ ...conteudo, legenda: 'Texto alterado' }])[0].validadeConteudo, null);
+    assert.equal(prepararMidiasParaAgenda([arquivo], [])[0].validadeConteudo, null);
+});
+
+test('agenda persiste e executa os quatro destinos sem duplicar confirmações', async () => {
+    const destinos = ['Instagram Feed', 'Instagram Story', 'Facebook Page', 'Facebook Story'];
+    const plano = PS.aprovar(PS.planejar(config({ destinos, facebookPageId: '123' }), [midia('quatro')]));
+    const armazenamento = criarArmazenamentoMemoria();
+    const { publicador, chamadas } = publicadorFicticio(({ destino }) => {
+        if (destino === 'Facebook Page') throw Object.assign(new Error('Permissão ausente'), { codigo: 'META_PERMISSAO' });
+        return { id: destino };
+    });
+    const motor = criarMotor({ armazenamento, publicador, agora: () => INSTANTE_10H_TOKYO });
+    motor.sincronizarPlanos([plano]);
+    await motor.executarCiclo();
+    assert.deepEqual(chamadas.map(c => c.destino), destinos);
+    const item = motor.listarPlanos()[0].itens[0];
+    assert.notEqual(item.status, 'confirmada');
+    assert.equal(item.resultados['Facebook Page'].estado, 'falhou');
+    assert.equal(item.resultados['Facebook Story'].estado, 'confirmada');
+    const reiniciado = criarMotor({ armazenamento, publicador, agora: () => INSTANTE_10H_TOKYO });
+    await reiniciado.executarCiclo();
+    assert.equal(chamadas.length, 4);
+});
+
+test('Story isolado aceita imagem e assinatura protege a Página Facebook', () => {
+    assert.equal(PS.avaliarParaDestinos({ tipo: 'imagem' }, ['Facebook Story']).elegivel, true);
+    assert.equal(PS.avaliarParaDestinos({ tipo: 'carrossel' }, ['Facebook Story']).elegivel, false);
+    const plano = PS.aprovar(PS.planejar(config({ destinos: ['Facebook Story'], facebookPageId: '123' }), [midia('foto', { tipo: 'imagem' })]));
+    const { aprovacaoValida } = require('../services/scheduler-service');
+    assert.equal(aprovacaoValida(plano.itens[0]), true);
+    assert.equal(aprovacaoValida({ ...plano.itens[0], facebookPageId: '456' }), false);
+});
+
 function midia(id, extra = {}) {
     return { id, tipo: 'video', status: 'disponível', nome: `${id}.mp4`, urlPublica: `https://midia.dominio-publico.com/${id}.mp4`, legenda: `legenda ${id}`, miniatura: null, ...extra };
 }
@@ -262,7 +419,7 @@ test('resultado incerto é reconciliado antes de qualquer reenvio', async () => 
     assert.equal(reconciliacoes, 1);
 });
 
-test('política de atraso reagenda além da tolerância e publica quando autorizado', async () => {
+test('horário expirado fica vencido e não publica automaticamente', async () => {
     const plano = PS.aprovar(PS.planejar(config({ atraso: 'reagendar', toleranciaMinutos: 30 }), [midia('a')]));
     const { publicador, chamadas } = publicadorFicticio();
     const motor = criarMotor({ armazenamento: criarArmazenamentoMemoria(), publicador, agora: () => INSTANTE_10H_TOKYO + 2 * 3600000 });
@@ -270,7 +427,22 @@ test('política de atraso reagenda além da tolerância e publica quando autoriz
     const resumo = await motor.executarCiclo();
     assert.equal(resumo.reagendados, 1);
     assert.equal(chamadas.length, 0);
-    assert.equal(motor.listarPlanos()[0].itens[0].status, 'reagendado');
+    assert.equal(motor.listarPlanos()[0].itens[0].status, 'vencido');
+    await motor.executarCiclo();
+    assert.equal(chamadas.length, 0);
+});
+
+test('item vencido só publica quando o usuário executa o plano escolhido', async () => {
+    const plano = PS.aprovar(PS.planejar(config({ atraso: 'publicar', toleranciaMinutos: 30 }), [midia('a')]));
+    const { publicador, chamadas } = publicadorFicticio();
+    const motor = criarMotor({ armazenamento: criarArmazenamentoMemoria(), publicador, agora: () => INSTANTE_10H_TOKYO + 2 * 3600000 });
+    motor.sincronizarPlanos([plano]);
+    await motor.executarCiclo();
+    assert.equal(chamadas.length, 0);
+    assert.equal(motor.listarPlanos()[0].itens[0].status, 'vencido');
+    const resumo = await motor.executarPlano(plano.id);
+    assert.equal(resumo.confirmados, 1);
+    assert.equal(chamadas.length, 1);
 });
 
 test('pausa impede novas execuções; retomar reabilita aprovados', async () => {

@@ -8,6 +8,65 @@ const vm = require('node:vm');
 const raiz = path.resolve(__dirname, '..', 'painel-meta-prototipo');
 const arquivos = ['regras.js', 'empresa.js', 'publicacoes.js', 'planejamento-semanal.js', 'diagnostico.js', 'integracao-regras.js', 'fluxo-editorial.js', 'logs.js', 'meta-conexao.js', 'painel.js', 'agendamentos.js'];
 
+test('agenda usa somente mídias do projeto atual, mesmo compartilhadas com projetos antigos', () => {
+    const fonte = fs.readFileSync(path.join(raiz, 'painel.js'), 'utf8');
+    const funcao = fonte.slice(fonte.indexOf('function ctxMidias()'), fonte.indexOf('/** Confirma cada mídia'));
+    const antigo = { id: 'antigo', legenda: 'Evento antigo', imagens: [{ id: 'compartilhada', tipo: 'imagem' }] };
+    const atual = { id: 'atual', legenda: 'Post atual', imagens: [{ id: 'compartilhada', tipo: 'imagem' }] };
+    const contexto = { atual, conteudos: [antigo, atual], bibliotecaMidias: [{ id: 'avulsa', tipo: 'imagem' }], Fluxo: require('../painel-meta-prototipo/fluxo-editorial') };
+    vm.createContext(contexto); vm.runInContext(funcao, contexto);
+    const midias = contexto.ctxMidias();
+    assert.equal(midias.length, 1);
+    assert.equal(midias[0].publicacaoId, 'atual');
+    assert.equal(midias[0].legendaEditorial, 'Post atual');
+    contexto.atual = { id: 'vazio', imagens: [] };
+    assert.equal(contexto.ctxMidias().length, 0);
+});
+
+test('seletor mostra criações recentes primeiro sem mudar coleção ou seleção', () => {
+    const fonte = fs.readFileSync(path.join(raiz, 'painel.js'), 'utf8');
+    const funcao = fonte.slice(fonte.indexOf('function atualizarSeletorConteudos('), fonte.indexOf('function trocarConteudo('));
+    const opcoes = [];
+    const seletor = { replaceChildren() { opcoes.length = 0; }, append(o) { opcoes.push(o); }, value: '' };
+    const conteudos = [{ id: 'antigo', criadaEm: '2026-11-01', atualizadoEm: '2026-11-09' }, { id: 'novo', criadaEm: '2026-11-05' }, { id: 'sem-data' }];
+    const contexto = { conteudos, atual: conteudos[0], $: () => seletor, elemento: (tag, texto) => ({ texto }) };
+    vm.createContext(contexto); vm.runInContext(funcao, contexto);
+    contexto.atualizarSeletorConteudos();
+    assert.deepEqual(opcoes.map(o => o.value), ['novo', 'antigo', 'sem-data']);
+    assert.deepEqual(conteudos.map(c => c.id), ['antigo', 'novo', 'sem-data']);
+    assert.equal(seletor.value, 'antigo');
+    assert.equal(opcoes[0].texto, 'Publicação 2');
+});
+
+test('revisão na geração salva limite inclusivo sem inventar data de evento', () => {
+    const fonte = fs.readFileSync(path.join(raiz, 'painel.js'), 'utf8');
+    const funcao = fonte.slice(fonte.indexOf('function revisarMidiasDoPeriodo('), fonte.indexOf('function renderizarPeriodoPrevia('));
+    const contexto = { PS: require('../painel-meta-prototipo/planejamento-semanal'), ctxMidias: () => [{ id: 'arte', publicacaoId: 'p' }], conteudos: [], prompt: () => '', confirm: () => true, avisar() {} };
+    vm.createContext(contexto); vm.runInContext(funcao, contexto);
+    const [midia] = contexto.revisarMidiasDoPeriodo({ prazoMaximoAgendamento: '2026-11-06' });
+    assert.equal(midia.validadeConteudo.dataEvento, undefined);
+    assert.equal(midia.validadeConteudo.validoAte, '2026-11-06');
+    assert.equal(contexto.PS.avaliarValidade(midia, Date.parse('2026-11-06T14:59:59Z')).elegivel, true);
+    assert.equal(contexto.PS.avaliarValidade(midia, Date.parse('2026-11-06T15:00:00Z')).elegivel, false);
+    contexto.conteudos = [{ id: 'p', validadeConteudo: { dataEvento: '2026-11-04', validoAte: '2026-11-03' } }];
+    assert.equal(contexto.revisarMidiasDoPeriodo({ prazoMaximoAgendamento: '2026-11-06' })[0].validadeConteudo.validoAte, '2026-11-03');
+    contexto.confirm = () => false;
+    assert.equal(contexto.revisarMidiasDoPeriodo({ prazoMaximoAgendamento: '2026-11-06' }), null);
+    contexto.prompt = () => null;
+    assert.equal(contexto.revisarMidiasDoPeriodo({ prazoMaximoAgendamento: '2026-11-06' }), null);
+});
+
+test('cliente permite consultas do histórico mas recusa rotas externas', async () => {
+    const IR = require('../painel-meta-prototipo/integracao-regras');
+    const chamadas = [];
+    const cliente = IR.criarCliente('http://localhost:8080', async url => { chamadas.push(String(url)); return new Response(JSON.stringify({ success: true, historico: [], permalink: null })); });
+    await cliente.solicitar('/publicacoes/historico');
+    await cliente.solicitar('/publicacoes/link?chave=agenda%3Aitem%3Afeed');
+    assert.equal(chamadas.length, 2);
+    await assert.rejects(cliente.solicitar('https://exemplo.com/publicacoes/link?chave=x'));
+    await assert.rejects(cliente.solicitar('/publicacoes/link?chave=x', {}));
+});
+
 /** Simula janela e relógio; nunca abre Facebook ou usa credenciais reais. */
 async function prepararPopupMeta({ bloqueado = false, configurado = true, falha = false } = {}) {
     const elementos = new Map(), eventos = [];
@@ -77,10 +136,11 @@ test('erro ao iniciar fecha popup vazio e configuração incompleta explica bloq
     assert.equal(p.popup.closed, true);
     assert.match(p.el('meta-estado').textContent, /Falha segura/);
     const incompleto = await prepararPopupMeta({ configurado: false });
-    assert.equal(incompleto.el('meta-conectar').disabled, true);
+    assert.equal(incompleto.el('meta-conectar').disabled, false);
     assert.match(incompleto.el('meta-configuracao-pendente').textContent, /App Secret da Meta/);
     await incompleto.el('meta-conectar').onclick();
     assert.ok(!incompleto.eventos.includes('abrir'));
+    assert.match(incompleto.el('meta-estado').textContent, /Complete os campos/);
 });
 
 test('cada campo de integração oferece atalho oficial em nova aba sem credenciais', () => {

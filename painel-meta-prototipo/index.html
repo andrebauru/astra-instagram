@@ -23,6 +23,7 @@
   <nav class="navegacao" aria-label="Áreas do Astra">
     <button type="button" data-view="editor" aria-pressed="true">Editor</button>
     <button type="button" data-view="agendamentos" aria-pressed="false">Agendamentos</button>
+    <button type="button" data-view="historico" aria-pressed="false">Histórico de publicações</button>
     <button type="button" data-view="configuracoes" aria-pressed="false">Configurações</button>
     <button type="button" data-view="logs" aria-pressed="false">Logs</button>
   </nav>
@@ -75,6 +76,17 @@
           <label id="campo-video-url" hidden>URL pública do vídeo<input id="videoUrl" type="url" placeholder="https://seu-dominio.com/video.mp4"></label>
         </div>
         <p id="status-url-publica" class="nota" role="status"></p>
+        <fieldset><legend>Validade para agendamento automático</legend>
+          <p class="nota">Confira as datas na arte e no vídeo, não só na legenda. Mídias sem revisão ficam bloqueadas na agenda. A IA não renova eventos vencidos.</p>
+          <label>Classificação<select id="validade-tipo"><option value="">Revisão pendente</option><option value="atemporal">Sem evento ou prazo (atemporal)</option><option value="evento">Evento / oferta com data de término</option></select></label>
+          <label>Data do evento<input id="validade-evento" type="date"></label>
+          <label>Último dia permitido (no fuso do plano)<input id="validade-ate" type="date"></label>
+          <p class="nota">Evento dia 7: divulgação até dia 6. Pode escolher um prazo ainda menor, nunca maior.</p>
+          <button id="validade-revisar" type="button">Confirmei as datas da mídia e do texto</button>
+          <p id="validade-status" class="nota"></p>
+          <button id="video-medir" type="button">Medir duração do vídeo da URL pública</button>
+          <p id="video-duracao-status" class="nota">Reels do Instagram: entre 3 e 900 segundos. Não é intervalo entre postagens.</p>
+        </fieldset>
         <label class="check"><input id="publicar-instagram" type="checkbox" checked> Publicar no Instagram (opcional)</label>
         <label class="check"><input id="publicar-facebook" type="checkbox"> Publicar na Página do Facebook (opcional)</label>
         <p class="nota">No Facebook: foto, conjunto de fotos ou vídeo da Página. A agenda possui seleção própria de destinos.</p>
@@ -195,6 +207,7 @@
         <div class="duas-colunas">
           <label>Data inicial<input id="periodo-inicio" type="date"></label>
           <label>Data final<input id="periodo-fim" type="date"></label>
+          <label>Último dia permitido para publicar (inclusive)<input id="periodo-prazo-maximo" type="date" required></label>
           <label>Timezone IANA<input id="periodo-timezone" list="fusos" value="Asia/Tokyo"><datalist id="fusos"><option value="Asia/Tokyo"><option value="America/Sao_Paulo"><option value="Europe/Lisbon"><option value="UTC"></datalist></label>
           <label>Estratégia de horário<select id="periodo-horario-modo"><option value="automatico">Automático (pela análise)</option><option value="manual">Manual</option></select></label>
           <label>Quantidade: como definir<select id="periodo-modo"><option value="total">Total no período</option><option value="porDia">Publicações por dia</option></select></label>
@@ -222,7 +235,8 @@
           <label class="check"><input type="checkbox" id="periodo-reutilizar"> Permitir reutilização de mídia</label>
           <label class="check"><input type="checkbox" id="periodo-instagram" checked> Agendar no Instagram</label>
           <label class="check"><input type="checkbox" id="periodo-facebook"> Agendar na Página do Facebook selecionada</label>
-          <label class="check"><input type="checkbox" id="periodo-story" disabled> Publicar também no Story</label>
+          <label class="check"><input type="checkbox" id="periodo-story" disabled> Story do Instagram (destino independente)</label>
+          <label class="check"><input type="checkbox" id="periodo-facebook-story" disabled> Story do Facebook (destino independente)</label>
         </div>
         <p id="periodo-story-explicacao" class="nota">Stories exigem uma conta Instagram Business verificada.</p>
         <div class="acoes">
@@ -230,7 +244,7 @@
           <button id="periodo-confirmar" class="primario" type="button" disabled>Confirmar plano</button>
         </div>
         <p id="periodo-status" class="nota" role="status"></p>
-        <p class="nota">Após a confirmação, o backend executa o plano mesmo com o navegador fechado. O processo Node precisa permanecer ativo.</p>
+        <p class="nota">1. Escolha os destinos acima (independentes de Publicar agora). 2. Gere e revise a prévia. 3. Confirme o plano para agendar. Mantenha o Astra aberto e o computador ligado. Horários vencidos não são publicados automaticamente. Consulte Agendamentos para ver o resultado por rede.</p>
         <div id="periodo-previa"></div>
 
         <h3>Base usada para recomendação</h3>
@@ -261,10 +275,16 @@
 <!-- ============================================================= -->
 <!-- AGENDAMENTOS                                                  -->
 <!-- ============================================================= -->
+<section id="view-historico" class="view" hidden>
+  <h2>Histórico de publicações</h2>
+  <p class="nota">Envios registrados neste Astra, por destino. Stories podem expirar ou não oferecer link. Um ID confirmado não garante que a publicação continue disponível.</p>
+  <button id="atualizar-historico" type="button">Atualizar histórico</button>
+  <div id="lista-historico"></div>
+</section>
 <section id="view-agendamentos" class="view" hidden>
   <div class="cabecalho">
     <div><p class="eyebrow">PROGRAMAÇÃO</p><h1>Agendamentos</h1><p class="muted">Pausar, retomar, cancelar, reagendar e editar planos. A execução reutiliza o InstagramService.</p></div>
-    <div class="acoes"><button id="executar-agenda" type="button">Executar pendentes agora</button><button id="atualizar-agendamentos" type="button">Atualizar</button></div>
+    <div class="acoes"><button id="atualizar-agendamentos" type="button">Atualizar</button></div>
   </div>
   <div id="lista-agendamentos" class="calendario-semanal"></div>
 </section>
@@ -273,6 +293,15 @@
 <!-- CONFIGURAÇÕES                                                 -->
 <!-- ============================================================= -->
 <section id="view-configuracoes" class="view" hidden>
+  <article class="cartao">
+    <h2>Backup criptografado das integrações</h2>
+    <p>Inclui as credenciais configuradas de Meta, Instagram, Facebook e IA. Não inclui projetos, mídias, agenda, sessões OAuth ou o arquivo .env inteiro. Na outra máquina, pode ser necessário reconectar a Meta. Guarde a senha: ela não pode ser recuperada.</p>
+    <label>Senha do backup (mínimo 12 caracteres)<input id="backup-senha" type="password" autocomplete="new-password" minlength="12" maxlength="256"></label>
+    <label>Arquivo para importar<input id="backup-arquivo" type="file" accept=".astra-backup"></label>
+    <button id="backup-exportar" type="button">Exportar configurações</button>
+    <button id="backup-importar" type="button">Importar configurações</button>
+    <p id="backup-status" role="status"></p>
+  </article>
   <div class="cabecalho"><div><p class="eyebrow">SUPORTE</p><h1>Configurações</h1></div></div>
   <article class="cartao" aria-labelledby="meta-titulo">
     <h2 id="meta-titulo">Conexão guiada com Facebook</h2>

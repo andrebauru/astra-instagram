@@ -21,6 +21,7 @@ h3{font-size:15px;margin:18px 0 10px}
 .nota,small{font-size:12px}
 .ok{color:#277049}
 .pendente{color:#9a582c}
+.erro{color:#b42318;font-weight:700}
 .conexao{display:flex;justify-content:space-between;align-items:center;gap:16px;background:#fff;border:1px solid var(--borda);border-radius:10px;padding:16px 20px;margin-bottom:20px;font-size:13px;flex-wrap:wrap}
 .conexao p{margin:6px 0 0}
 .etapas-conexao{list-style:none;padding:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:16px 0}

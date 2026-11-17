@@ -1,6 +1,12 @@
 'use strict';
 
 const regrasFluxo = typeof require === 'function' ? require('./regras') : globalThis.Regras;
+const segurancaFluxo = typeof require === 'function' ? require('./planejamento-semanal') : globalThis.PlanejamentoSemanal;
+
+/** Só transporta revisão ainda vinculada ao conteúdo original. */
+function validadeRevisada(conteudo) {
+    return conteudo?.validadeConteudo?.assinatura === segurancaFluxo.assinaturaRevisao(conteudo) ? conteudo.validadeConteudo : null;
+}
 
 /** Associa cada mídia ao conteúdo que fornece legenda, template e campos protegidos. */
 function prepararMidiasParaAgenda(midias = [], conteudos = []) {
@@ -8,12 +14,14 @@ function prepararMidiasParaAgenda(midias = [], conteudos = []) {
         const conteudo = conteudos.find(item => (item.imagens || []).some(arquivo => arquivo.id === midia.id));
         const arquivo = conteudo?.imagens.find(item => item.id === midia.id) || midia;
         const tipo = arquivo.mime === 'video/mp4' || /\.mp4(?:[?#]|$)/i.test(arquivo.nome || arquivo.urlPublica || '') ? 'video' : arquivo.tipo;
-        if (!conteudo) return { ...midia, tipo };
+        if (!conteudo) return { ...midia, tipo, validadeConteudo: null };
         return {
             ...midia,
             ...arquivo,
             tipo,
             publicacaoId: conteudo.id,
+            validadeConteudo: validadeRevisada(conteudo),
+            duracaoSegundos: conteudo.duracaoVideo?.url && conteudo.duracaoVideo.url === (arquivo.urlPublica || arquivo.url || conteudo.videoUrl) ? conteudo.duracaoVideo.segundos : null,
             legendaEditorial: conteudo.legenda || '',
             legenda: regrasFluxo.compor(conteudo)
         };
@@ -25,6 +33,7 @@ function prepararMidiasParaAgenda(midias = [], conteudos = []) {
         status: 'disponível',
         itens: conteudo.imagens.map(midia => ({ ...midia })),
         publicacaoId: conteudo.id,
+        validadeConteudo: validadeRevisada(conteudo),
         legendaEditorial: conteudo.legenda || '',
         legenda: regrasFluxo.compor(conteudo)
     }));

@@ -7,7 +7,7 @@ const { createHash } = require('node:crypto');
 function criarFacebookService({ pageId, token, versao = '', store, fetchImpl } = {}) {
     const base = `https://graph.facebook.com${versao ? '/' + versao : ''}`;
     /** Mantém autenticação fora da URL e não expõe respostas externas. */
-    async function request(caminho, parametros) {
+    async function request(caminho, parametros, prazo = 120000) {
         if (!pageId || !token) throw erroSeguro('FACEBOOK_NAO_CONFIGURADO', 'Configure o ID e o token de acesso da Página do Facebook.', 503);
         let resposta, dados;
         try {
@@ -15,7 +15,7 @@ function criarFacebookService({ pageId, token, versao = '', store, fetchImpl } =
                 method: parametros ? 'POST' : 'GET',
                 headers: { Authorization: `Bearer ${token}`, ...(parametros ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
                 ...(parametros ? { body: new URLSearchParams(parametros).toString() } : {}),
-                signal: AbortSignal.timeout(120000)
+                signal: AbortSignal.timeout(prazo)
             });
             dados = await resposta.json();
         } catch { throw erroSeguro('PUBLICACAO_INDETERMINADA', 'Sem confirmação do Facebook. Confira a Página antes de repetir o envio.'); }
@@ -73,6 +73,11 @@ function criarFacebookService({ pageId, token, versao = '', store, fetchImpl } =
         }
         estado = { ...estado, mediaId: dados.post_id || dados.id, formato: entrada.formato, publicadoEm: new Date().toISOString(), incerto: false };
         store.salvar(chave, estado);
+        // O recibo já está salvo: falha ao obter o link nunca permite republicação.
+        try {
+            const detalhe = await detalheMidia(estado.mediaId);
+            if (detalhe.permalink) { estado.permalink = detalhe.permalink; store.salvar(chave, estado); }
+        } catch { /* Link opcional; o histórico permite consultar novamente. */ }
         return estado;
     }
     /** Stories são destinos próprios; carrossel não é convertido silenciosamente. */
@@ -119,6 +124,11 @@ function criarFacebookService({ pageId, token, versao = '', store, fetchImpl } =
         estado.publicadoEm = new Date().toISOString(); store.salvar(chave, estado);
         return { mediaId: estado.mediaId, publicadoEm: estado.publicadoEm };
     }
-    return { perfil, validar, publish, validarStory, publicarStory };
+    /** Consulta o link canônico sem publicar ou deduzir URLs a partir de IDs. */
+    async function detalheMidia(id) {
+        const dados = await request(`${encodeURIComponent(id)}?fields=permalink_url`, undefined, 10000);
+        return { permalink: dados.permalink_url || null };
+    }
+    return { perfil, validar, publish, validarStory, publicarStory, detalheMidia };
 }
 module.exports = { criarFacebookService };

@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { instalarDataHoraConsole } = require('./services/console-data-hora');
 
 /** Cria o arquivo local de configuração somente quando ele ainda não existe. */
 function garantirEnvLocal(diretorio = __dirname) {
@@ -17,6 +18,7 @@ function garantirEnvLocal(diretorio = __dirname) {
 
 /** Inicia o backend depois de preparar a configuração local. */
 function iniciar() {
+    instalarDataHoraConsole({ timezone: process.env.ASTRA_TIMEZONE || 'Asia/Tokyo' });
     try {
         if (garantirEnvLocal()) console.log('Arquivo .env criado a partir do modelo. Preencha as integrações localmente.');
     } catch (erro) {

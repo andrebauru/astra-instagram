@@ -45,6 +45,118 @@ async function comServidor(executar) {
 
 const json = (dados, status = 200) => new Response(JSON.stringify(dados), { status, headers: { 'content-type': 'application/json' } });
 
+test('backup autentica senha e conteúdo sem revelar credenciais no envelope', async () => {
+    const backup = require('../services/backup-configuracoes');
+    const entrada = { META_APP_SECRET: 'segredo-ficticio-do-backup', INSTAGRAM_ACCESS_TOKEN: 'token-ficticio' };
+    const senha = 'senha-ficticia-longa';
+    const arquivo = await backup.exportar(entrada, senha);
+    assert.ok(!JSON.stringify(arquivo).includes(entrada.META_APP_SECRET));
+    assert.deepEqual(await backup.importar(arquivo, senha), entrada);
+    await assert.rejects(backup.importar(arquivo, 'outra-senha-ficticia'));
+    await assert.rejects(backup.importar({ ...arquivo, tag: Buffer.alloc(16).toString('base64') }, senha));
+    await assert.rejects(backup.importar({ ...arquivo, formato: 'outro' }, senha));
+    await assert.rejects(backup.exportar(entrada, 'curta'));
+    assert.notEqual((await backup.exportar(entrada, senha)).dados, arquivo.dados);
+});
+
+test('exportação e importação exigem sessão local antes de ler configurações', async () => {
+    await comServidor(async ({ solicitar, chamadas }) => {
+        assert.equal((await solicitar('/config/exportar', { senha: 'senha-ficticia-longa' })).status, 403);
+        assert.equal((await solicitar('/config/importar', { senha: 'senha-ficticia-longa', arquivo: {} })).status, 403);
+        assert.equal(chamadas().length, 0);
+    });
+});
+
+test('exportação autenticada não expõe segredo e importação inválida preserva configuração', async () => {
+    await comServidor(async ({ solicitar }) => {
+        const inicial = await solicitar('/meta/conexao');
+        const sessao = await inicial.json();
+        const headers = { Cookie: inicial.headers.get('set-cookie').split(';')[0], 'X-Astra-CSRF': sessao.csrf };
+        const senha = 'senha-ficticia-portatil';
+        const resposta = await solicitar('/config/exportar', { senha }, headers);
+        assert.equal(resposta.status, 200);
+        assert.equal(resposta.headers.get('cache-control'), 'no-store');
+        const texto = await resposta.text();
+        assert.ok(!texto.includes(process.env.INSTAGRAM_ACCESS_TOKEN));
+        const { arquivo } = JSON.parse(texto);
+        const antes = process.env.INSTAGRAM_ACCESS_TOKEN;
+        assert.equal((await solicitar('/config/importar', { senha: 'senha-ficticia-errada', arquivo }, headers)).status, 400);
+        assert.equal(process.env.INSTAGRAM_ACCESS_TOKEN, antes);
+    });
+});
+
+test('API preserva validade e duração assinadas ao sincronizar a agenda', async () => {
+    const PS = require('../painel-meta-prototipo/planejamento-semanal');
+    const { aprovacaoValida } = require('../services/scheduler-service');
+    const plano = PS.aprovar({ id: 'validade-api', itens: [{ id: 'validade-api:1', mediaId: 'm1', tipo: 'video', data: '2099-01-01', hora: '10:00', timezone: 'Asia/Tokyo', destinos: ['Instagram Feed'], legenda: 'Revisado', url: 'https://exemplo.com/video.mp4', validadeConteudo: { tipo: 'evento', validoAte: '2099-01-02', assinatura: 'revisao-teste' }, duracaoSegundos: 10 }] });
+    await comServidor(async ({ solicitar }) => {
+        const r = await (await solicitar('/agenda/planos', { planos: [plano] })).json();
+        const item = r.planos.find(p => p.id === plano.id).itens[0];
+        assert.deepEqual(item.validadeConteudo, plano.itens[0].validadeConteudo);
+        assert.equal(item.duracaoSegundos, 10);
+        assert.equal(aprovacaoValida(item), true);
+        require('../server').schedulerService.removerPlano(plano.id);
+    });
+});
+
+test('API preserva data do evento e prazo; cancelar e excluir não permite retomada', async () => {
+    const PS = require('../painel-meta-prototipo/planejamento-semanal');
+    const { aprovacaoValida } = require('../services/scheduler-service');
+    const plano = PS.aprovar({ id: 'prazo-evento-api', itens: [{ id: 'prazo-evento-api:1', mediaId: 'm1', tipo: 'video', data: '2099-01-05', hora: '10:00', timezone: 'Asia/Tokyo', destinos: ['Instagram Feed'], legenda: 'Evento', url: 'https://exemplo.com/video.mp4', prazoMaximoAgendamento: '2099-01-06', validadeConteudo: { tipo: 'evento', validoAte: '2099-01-06', dataEvento: '2099-01-07', assinatura: 'revisao-teste' }, duracaoSegundos: 10 }] });
+    await comServidor(async ({ solicitar, limparChamadas, chamadas }) => {
+        limparChamadas();
+        const r = await (await solicitar('/agenda/planos', { planos: [plano] })).json();
+        const item = r.planos.find(p => p.id === plano.id).itens[0];
+        assert.equal(aprovacaoValida(item), true);
+        assert.equal(item.validadeConteudo.dataEvento, '2099-01-07');
+        assert.equal(item.prazoMaximoAgendamento, '2099-01-06');
+        assert.equal((await solicitar('/agenda/cancelar-plano', { planoId: plano.id })).status, 200);
+        assert.equal((await solicitar('/agenda/retomar', { planoId: plano.id })).status, 404);
+        assert.equal((await solicitar('/agenda/excluir-plano', { planoId: plano.id })).status, 200);
+        const nova = await (await solicitar('/agenda/planos', { planos: [plano] })).json();
+        assert.ok(!nova.planos.some(p => p.id === plano.id));
+        assert.equal(chamadas().length, 0);
+    });
+});
+
+test('Reel curto ou sem duração é bloqueado antes de qualquer chamada à Meta', async () => {
+    await comServidor(async ({ solicitar, limparChamadas, chamadas }) => {
+        for (const duracaoSegundos of [null, 2.9, 901]) {
+            limparChamadas();
+            const resposta = await solicitar('/instagram/publish', { formato: 'reel', videoUrl: 'https://exemplo.com/video.mp4', duracaoSegundos });
+            assert.equal(resposta.status, 400);
+            assert.ok((await resposta.text()).includes('REEL_DURACAO_INVALIDA'));
+            assert.equal(chamadas().length, 0);
+        }
+    });
+});
+
+test('histórico expõe recibos sem estado privado e consulta permalink sem publicar', async () => {
+    const { criarStorePublicacoesMeta } = require('../services/publicacao-meta-store');
+    const store = criarStorePublicacoesMeta(process.env.ASTRA_PUBLICACOES_META_ARQUIVO);
+    store.salvar('historico-teste:feed', { mediaId: '123456', uploadUrl: 'SEGREDO-TESTE', assinatura: 'PRIVADO' });
+    await comServidor(async ({ solicitar, definirResponder, limparChamadas, chamadas }) => {
+        limparChamadas();
+        const resposta = await solicitar('/publicacoes/historico');
+        const texto = await resposta.text();
+        assert.equal(resposta.status, 200);
+        assert.ok(texto.includes('123456'));
+        assert.ok(!texto.includes('SEGREDO-TESTE'));
+        assert.ok(!texto.includes('PRIVADO'));
+        assert.equal(chamadas().length, 0);
+        definirResponder(() => json({ id: '123456', permalink: 'https://www.instagram.com/p/teste/' }));
+        const link = await (await solicitar('/publicacoes/link?chave=historico-teste%3Afeed')).json();
+        assert.equal(link.permalink, 'https://www.instagram.com/p/teste/');
+        limparChamadas();
+        const cache = await (await solicitar('/publicacoes/link?chave=historico-teste%3Afeed')).json();
+        assert.equal(cache.permalink, link.permalink);
+        assert.equal(chamadas().length, 0);
+        const historico = await (await solicitar('/publicacoes/historico')).json();
+        assert.equal(historico.historico.find(r => r.chave === 'historico-teste:feed').permalink, link.permalink);
+        assert.equal((await solicitar('/publicacoes/link?chave=inexistente')).status, 404);
+    });
+});
+
 test('health, raiz e build sem expor segredos', async () => {
     await comServidor(async ({ solicitar }) => {
         const saude = await (await solicitar('/health')).json();
@@ -222,7 +334,8 @@ test('Facebook opcional publica sem chamar Instagram e exige destino e ID antes 
         const body = { formato: 'imagem', imageUrl: 'https://midia.dominio-publico.com/foto.jpg', publicarInstagram: false, publicarFacebook: true, publicationId: `facebook-${process.pid}` };
         const resultado = await (await solicitar('/instagram/publish', body)).json();
         assert.equal(resultado.resultadosPublicacao.facebook.idPublicado, 'post-facebook');
-        assert.equal(chamadas().length, 1);
+        assert.equal(chamadas().length, 2);
+        assert.equal(chamadas()[1].opcoes.method, 'GET');
         assert.ok(chamadas()[0].url.includes('graph.facebook.com'));
         limparChamadas();
         assert.equal((await solicitar('/instagram/publish', { ...body, publicarFacebook: false })).status, 400);
@@ -322,7 +435,8 @@ test('agendamento rascunho não executa e aprovado usa o mesmo caminho de public
         const plano = { id: 'plano-api-1', status: 'rascunho', itens: [item] };
         const sincronizado = await (await solicitar('/agenda/planos', { planos: [plano] })).json();
         assert.equal(sincronizado.planos.length, 1);
-        const rascunho = await (await solicitar('/agenda/executar', {})).json();
+        assert.equal((await solicitar('/agenda/executar', {})).status, 400);
+        const rascunho = await (await solicitar('/agenda/executar', { planoId: plano.id })).json();
         assert.equal(rascunho.executados, 0);
     });
 });

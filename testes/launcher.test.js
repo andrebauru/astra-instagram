@@ -2,10 +2,15 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { formatarDataHora } = require('../services/console-data-hora');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { garantirEnvLocal } = require('../iniciar');
+
+test('terminal formata data e hora no fuso configurado', () => {
+    assert.equal(formatarDataHora(new Date('2026-10-30T05:06:07Z'), 'Asia/Tokyo'), '30/10/2026 14:06:07');
+});
 
 /** Exercita o provisionamento em pasta temporária, sem tocar no .env do projeto. */
 test('primeira execução cria .env sem segredos e preserva o arquivo existente', () => {

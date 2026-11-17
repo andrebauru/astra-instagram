@@ -52,6 +52,8 @@ function criarStoreIntegracoes(caminho, opcoes = {}) {
         dados.FACEBOOK_PAGE_ID = ''; dados.FACEBOOK_PAGE_ACCESS_TOKEN = '';
         cofre.salvar(dados); carregar();
     }
-    return { carregar, publico, salvar, limparFacebook };
+    /** Obtém apenas integrações permitidas para criptografia no servidor. */
+    function paraBackup() { return Object.fromEntries(CAMPOS.filter(c => typeof process.env[c] === 'string').map(c => [c, process.env[c]])); }
+    return { carregar, publico, salvar, limparFacebook, paraBackup };
 }
 module.exports = { criarStoreIntegracoes, SECRETOS };

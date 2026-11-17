@@ -2,6 +2,70 @@
 
 const regrasSemanal = (typeof require === 'function') ? require('./regras') : globalThis.Regras;
 
+/** Invalida a revisão humana quando o texto ou as mídias mudam. */
+function assinaturaRevisao(conteudo = {}) {
+    return assinar({ conteudo: JSON.stringify([conteudo.tipoMidia, conteudo.titulo, conteudo.tema, conteudo.fatos, conteudo.textoMidia, conteudo.legenda, conteudo.imagemUrl, conteudo.videoUrl, (conteudo.imagens || []).map(m => [m.id, m.urlPublica, m.url])]) });
+}
+
+/** Valida datas civis sem aceitar normalizações como 30 de fevereiro. */
+function dataValida(data) {
+    const instante = Date.parse(`${data}T00:00:00Z`);
+    return /^\d{4}-\d{2}-\d{2}$/.test(data || '') && Number.isFinite(instante) && new Date(instante).toISOString().slice(0, 10) === data;
+}
+
+/** Evento no dia 7 permite divulgação somente até o dia 6. */
+function diaAnteriorEvento(data) {
+    return dataValida(data) ? new Date(Date.parse(`${data}T00:00:00Z`) - 86400000).toISOString().slice(0, 10) : null;
+}
+
+/** O menor prazo prevalece: evento, conteúdo ou limite explícito da agenda. */
+function avaliarPrazo(midia = {}, referencia = Date.now(), timezone = midia.timezone || 'Asia/Tokyo') {
+    const revisao = midia.validadeConteudo || {};
+    const limites = [midia.prazoMaximoAgendamento, revisao.validoAte].filter(Boolean);
+    if (revisao.dataEvento) {
+        const anterior = diaAnteriorEvento(revisao.dataEvento);
+        if (!anterior) return { elegivel: false, motivo: 'Data do evento inválida.' };
+        limites.push(anterior);
+    }
+    if (limites.some(data => !dataValida(data))) return { elegivel: false, motivo: 'Prazo máximo inválido.' };
+    if (!limites.length) return { elegivel: true, motivo: null, limite: null };
+    const limite = limites.sort()[0];
+    const partes = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(referencia));
+    const campo = tipo => partes.find(p => p.type === tipo).value;
+    const dia = `${campo('year')}-${campo('month')}-${campo('day')}`;
+    return dia > limite ? { elegivel: false, prazoExpirado: true, limite, motivo: `Prazo de publicação encerrado em ${limite}. Agendamento cancelado; não publicar após essa data.` } : { elegivel: true, motivo: null, limite };
+}
+
+/** Datas na arte exigem revisão humana; idade do arquivo não prova validade. */
+function avaliarValidade(midia = {}, referencia = Date.now(), timezone = 'Asia/Tokyo') {
+    const prazo = avaliarPrazo(midia, referencia, timezone);
+    if (!prazo.elegivel) return prazo;
+    const revisao = midia.validadeConteudo;
+    if (!revisao || !['atemporal', 'evento'].includes(revisao.tipo)) return { elegivel: false, motivo: 'Revise a validade do conteúdo e as datas visíveis na mídia antes de agendar.' };
+    if (revisao.tipo === 'atemporal') return { elegivel: true, motivo: null };
+    const data = revisao.dataEvento ? diaAnteriorEvento(revisao.dataEvento) : revisao.validoAte;
+    const instante = Date.parse(`${data}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data || '') || !Number.isFinite(instante) || new Date(instante).toISOString().slice(0, 10) !== data) return { elegivel: false, motivo: 'Informe uma data válida para o término do evento.' };
+    const partes = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(referencia));
+    const campo = tipo => partes.find(p => p.type === tipo).value;
+    const dia = `${campo('year')}-${campo('month')}-${campo('day')}`;
+    return dia > data ? { elegivel: false, motivo: `Evento vencido em ${data}. Variação de texto não renova a validade da mídia.` } : { elegivel: true, motivo: null };
+}
+
+/** Limite documentado para Reels; não é intervalo entre publicações. */
+function avaliarDuracaoReel(midia, destinos = []) {
+    if (!['video', 'reel'].includes(midia.tipo) || !destinos.some(d => ['Instagram', 'Instagram Feed'].includes(d))) return { elegivel: true, motivo: null };
+    const duracao = Number(midia.duracaoSegundos);
+    if (!Number.isFinite(duracao) || duracao <= 0) return { elegivel: false, motivo: 'Meça a duração do vídeo no Editor antes de agendar um Reel.' };
+    return duracao < 3 || duracao > 900 ? { elegivel: false, motivo: 'Reels pela API do Instagram exigem duração entre 3 e 900 segundos.' } : { elegivel: true, motivo: null };
+}
+
+/** Revalida no horário planejado e antes do envio real. */
+function avaliarSegurancaAgenda(item, referencia, timezone) {
+    const validade = avaliarValidade(item, referencia, timezone || item.timezone || 'Asia/Tokyo');
+    return validade.elegivel ? avaliarDuracaoReel(item, item.destinos || []) : validade;
+}
+
 /*
  * Planejamento semanal (somente Instagram).
  *
@@ -87,6 +151,8 @@ function avaliarElegibilidadeOrganica(midia = {}) {
 
 /** Aplica limites por destino sem mudar a regra orgânica Instagram existente. */
 function avaliarParaDestinos(midia, destinos = []) {
+    if (destinos.some(d => d.endsWith('Story')) && midia.tipo === 'carrossel') return { elegivel: false, motivo: 'Stories exigem imagem ou vídeo individual; selecione outro plano para carrosséis.' };
+    if (destinos.length && destinos.every(d => ['Instagram Story', 'Facebook Story'].includes(d)) && ['imagem', 'video', 'reel'].includes(midia.tipo)) return { elegivel: true, motivo: null };
     if (destinos.includes('Facebook Page')) {
         const itens = midia.itens || midia.imagens || [];
         if (midia.tipo === 'carrossel' && (itens.length < 2 || itens.length > 10 || itens.some(i => i.tipo === 'video'))) return { elegivel: false, motivo: 'Facebook aceita de 2 a 10 fotos, sem vídeos no conjunto.' };
@@ -97,7 +163,7 @@ function avaliarParaDestinos(midia, destinos = []) {
 
 /** Inclui a identidade da Página sem invalidar aprovações Instagram legadas. */
 function dadosAprovacao(item) {
-    return { mediaId: item.mediaId, data: item.data, hora: item.hora, timezone: item.timezone, destinos: item.destinos, legenda: item.legenda, ...(item.destinos?.includes('Facebook Page') ? { facebookPageId: item.facebookPageId || null } : {}) };
+    return { mediaId: item.mediaId, data: item.data, hora: item.hora, timezone: item.timezone, destinos: item.destinos, legenda: item.legenda, ...(item.prazoMaximoAgendamento ? { prazoMaximoAgendamento: item.prazoMaximoAgendamento } : {}), ...(item.validadeConteudo ? { validadeConteudo: JSON.stringify(item.validadeConteudo), duracaoSegundos: item.duracaoSegundos ?? null } : {}), ...(item.destinos?.some(d => d.startsWith('Facebook')) ? { facebookPageId: item.facebookPageId || null } : {}) };
 }
 
 /** Informa quantas mídias elegíveis faltam e por quê. */
@@ -215,10 +281,14 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
     if (erros.length) return { valido: false, erros, faltam: 0, itens: [] };
 
     const agoraMs = Number.isFinite(opcoes.agoraMs) ? opcoes.agoraMs : Date.now();
+    if (config.prazoMaximoAgendamento && !dataValida(config.prazoMaximoAgendamento)) return { valido: false, erros: ['Prazo máximo inválido.'], faltam: 0, itens: [] };
     const fimMs = fimDoPeriodo(config.fim, timezone);
 
     const tiposAceitos = config.tipos?.length ? config.tipos : ['imagem', 'video', 'carrossel'];
-    const avaliadas = (Array.isArray(midias) ? midias : []).map(item => ({ item, avaliacao: avaliarParaDestinos(item, config.destinos) }));
+    const avaliadas = (Array.isArray(midias) ? midias : []).map(item => {
+        const seguranca = config.exigirRevisaoTemporal ? avaliarSegurancaAgenda({ ...item, destinos: config.destinos }, agoraMs, timezone) : { elegivel: true };
+        return { item, avaliacao: seguranca.elegivel ? avaliarParaDestinos(item, config.destinos) : seguranca };
+    });
     const inelegiveis = avaliadas.filter(entrada => !entrada.avaliacao.elegivel).map(entrada => ({ id: entrada.item.id, tipo: entrada.item.tipo || 'imagem', motivo: entrada.avaliacao.motivo }));
     const estoque = avaliadas.filter(entrada => entrada.avaliacao.elegivel).map(entrada => entrada.item).filter(m => tiposAceitos.includes(m.tipo) && m.status !== 'utilizada');
     let indiceMidia = 0;
@@ -240,6 +310,7 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
             const instante = instantes[0];
             if (instante <= agoraMs) continue;
             if (instante > fimMs) continue;
+            if (!avaliarPrazo({ prazoMaximoAgendamento: config.prazoMaximoAgendamento }, instante, timezone).elegivel) continue;
             if (ultimoMs !== null) {
                 const deltaHoras = (instante - ultimoMs) / 3600000;
                 if (deltaHoras < intervaloMin) continue;
@@ -247,10 +318,11 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
             }
             let midia = null;
             if (precisaMidia) {
+                const disponiveis = estoque.filter(m => !config.exigirRevisaoTemporal || avaliarSegurancaAgenda({ ...m, destinos: config.destinos }, instante, timezone).elegivel);
                 if (!config.permitirReutilizacao) {
-                    midia = estoque.find(m => !usadas.has(m.id));
+                    midia = disponiveis.find(m => !usadas.has(m.id));
                 } else {
-                    midia = estoque[indiceMidia % estoque.length];
+                    midia = disponiveis[indiceMidia % disponiveis.length];
                 }
                 if (!midia) { faltamMidia += 1; continue; }
                 usadas.add(midia.id); indiceMidia += 1;
@@ -268,6 +340,9 @@ function planejarPeriodo(config = {}, midias = [], opcoes = {}) {
                 legenda: midia ? (midia.legenda || '') : '',
                 legendaEditorial: midia ? (midia.legendaEditorial || '') : '',
                 publicacaoId: midia?.publicacaoId || null,
+                validadeConteudo: midia?.validadeConteudo || null,
+                prazoMaximoAgendamento: config.prazoMaximoAgendamento || null,
+                duracaoSegundos: midia?.duracaoSegundos ?? null,
                 status: 'rascunho', approvalSignature: null,
                 variarTexto: config.variarTexto === true, nivelVariacao: config.nivelVariacao || 'Baixa',
                 versao: 1,
@@ -304,6 +379,6 @@ function liberarMidias(plano, midias = []) {
     return midias.map(midia => midia.status === 'reservada' && (midia.planoId === plano.id || usados.has(midia.id)) ? { ...midia, status: 'disponível', planoId: null } : midia);
 }
 
-const PlanejamentoSemanal = { assinar, dadosAprovacao, avaliarParaDestinos, validarConfiguracao, pendenciasDeExecucao, identidadeVisual, avaliarElegibilidadeOrganica, embaralharDeterministico, datasDoPeriodo, urlDaMidia, planejar, planejarPeriodo, aprovar, editarItem, pausar, cancelarItem, criarCarrossel, reservarMidias, liberarMidias };
+const PlanejamentoSemanal = { dataValida, diaAnteriorEvento, avaliarPrazo, assinaturaRevisao, avaliarValidade, avaliarDuracaoReel, avaliarSegurancaAgenda, assinar, dadosAprovacao, avaliarParaDestinos, validarConfiguracao, pendenciasDeExecucao, identidadeVisual, avaliarElegibilidadeOrganica, embaralharDeterministico, datasDoPeriodo, urlDaMidia, planejar, planejarPeriodo, aprovar, editarItem, pausar, cancelarItem, criarCarrossel, reservarMidias, liberarMidias };
 if (typeof module !== 'undefined') module.exports = PlanejamentoSemanal;
 else globalThis.PlanejamentoSemanal = PlanejamentoSemanal;

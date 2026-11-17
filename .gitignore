@@ -14,6 +14,7 @@ dados/
 # Arquivos históricos/backups (não fazem parte do projeto ativo)
 backup-*/
 _backups/
+*.astra-backup
 
 # Sistema / editores
 .DS_Store

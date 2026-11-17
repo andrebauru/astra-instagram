@@ -73,7 +73,8 @@ test('Facebook publica imagem, mantém token fora da URL e não repete sucesso',
     const entrada = { formato: 'imagem', imageUrl: 'https://exemplo.com/foto.jpg', caption: 'Teste' };
     assert.equal((await servico.publish(entrada, 'pub')).mediaId, 'post');
     await servico.publish(entrada, 'pub');
-    assert.equal(chamadas.length, 1);
+    assert.equal(chamadas.length, 2);
+    assert.equal(chamadas[1].opcoes.method, 'GET');
     assert.equal(chamadas[0].url, 'https://graph.facebook.com/v25.0/123/photos');
     assert.equal(chamadas[0].opcoes.headers.Authorization, 'Bearer segredo-ficticio');
     assert.ok(!chamadas[0].url.includes('segredo'));
@@ -91,7 +92,8 @@ test('Facebook publica três fotos preservando todos os IDs anexados', async () 
     let n = 0;
     const { servico, chamadas } = preparar(() => ({ id: `id-${++n}` }));
     await servico.publish({ formato: 'carrossel', itens: [1, 2, 3].map(i => ({ tipo: 'imagem', url: `https://exemplo.com/${i}.jpg` })) }, 'album');
-    assert.equal(chamadas.length, 4);
+    assert.equal(chamadas.length, 5);
+    assert.equal(chamadas[4].opcoes.method, 'GET');
     for (const chamada of chamadas.slice(0, 3)) assert.equal(new URLSearchParams(chamada.opcoes.body).get('published'), 'false');
     assert.deepEqual(JSON.parse(new URLSearchParams(chamadas[3].opcoes.body).get('attached_media')), [{ media_fbid: 'id-1' }, { media_fbid: 'id-2' }, { media_fbid: 'id-3' }]);
 });

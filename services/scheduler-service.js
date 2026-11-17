@@ -15,9 +15,9 @@ const PlanejamentoSemanal = require('../painel-meta-prototipo/planejamento-seman
 const Regras = require('../painel-meta-prototipo/regras');
 
 const ESTADOS_PLANO = ['rascunho', 'aprovado', 'parcialmente aprovado', 'pausado', 'concluido', 'cancelado'];
-const ESTADOS_ITEM = ['rascunho', 'aprovado', 'pausado', 'aguardando', 'em andamento', 'confirmada', 'incerto', 'falhou', 'reagendado', 'cancelado', 'bloqueado'];
+const ESTADOS_ITEM = ['rascunho', 'aprovado', 'pausado', 'aguardando', 'em andamento', 'confirmada', 'incerto', 'falhou', 'vencido', 'reagendado', 'cancelado', 'bloqueado'];
 const CODIGOS_INCERTOS = ['META_CONEXAO', 'TEMPO_ESGOTADO', 'PUBLICACAO_INDETERMINADA', 'META_RESPOSTA_INVALIDA'];
-const DESTINOS = ['Instagram', 'Instagram Feed', 'Instagram Story', 'Facebook Page'];
+const DESTINOS = ['Instagram', 'Instagram Feed', 'Instagram Story', 'Facebook Page', 'Facebook Story'];
 
 function agoraISO(agora) { return new Date(agora).toISOString(); }
 
@@ -36,7 +36,8 @@ function destinosDoItem(item) {
 function assinaturaDoItem(item) {
     return PlanejamentoSemanal.assinar(PlanejamentoSemanal.dadosAprovacao({
         mediaId: item.mediaId, data: item.data, hora: item.hora,
-        timezone: item.timezone, destinos: destinosDoItem(item), legenda: item.legenda, facebookPageId: item.facebookPageId
+        timezone: item.timezone, destinos: destinosDoItem(item), legenda: item.legenda, facebookPageId: item.facebookPageId,
+        validadeConteudo: item.validadeConteudo, duracaoSegundos: item.duracaoSegundos, prazoMaximoAgendamento: item.prazoMaximoAgendamento
     }));
 }
 
@@ -82,7 +83,7 @@ function criarArmazenamentoMemoria(inicial = { planos: [] }) {
  * Motor de execução. Recebe um `publicador` injetado para permitir testes e
  * para que a produção sempre passe pelo InstagramService.
  */
-function criarMotor({ armazenamento, publicador, reconciliador = null, agora = Date.now, maxPorCiclo = 3, registrar = () => {} } = {}) {
+function criarMotor({ armazenamento, publicador, reconciliador = null, validarConteudo = null, agora = Date.now, maxPorCiclo = 3, registrar = () => {} } = {}) {
     if (!armazenamento || typeof armazenamento.carregar !== 'function') throw new Error('O motor de agenda precisa de um armazenamento.');
     if (typeof publicador !== 'function') throw new Error('O motor de agenda precisa de um publicador injetado.');
     const emAndamento = new Set();
@@ -110,15 +111,18 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
         for (const recebido of planos) {
             if (!recebido || typeof recebido !== 'object' || !recebido.id) continue;
             const anterior = mapa.get(recebido.id);
+            if (anterior?.excluidoEm || anterior?.status === 'cancelado') continue;
             const anteriores = new Map();
             for (const item of anterior?.itens || []) anteriores.set(item.id, item);
             const itens = (Array.isArray(recebido.itens) ? recebido.itens : []).map(item => {
                 const antes = anteriores.get(item.id);
+                if (antes?.excluidoEm || antes?.status === 'cancelado') return antes;
                 if (antes && antes.resultados && Object.keys(antes.resultados).length) {
                     return { ...item, status: antes.status, resultados: antes.resultados, motivo: antes.motivo };
                 }
                 return { ...item, resultados: {} };
             });
+            for (const antes of anteriores.values()) if ((antes.excluidoEm || antes.status === 'cancelado') && !itens.some(i => i.id === antes.id)) itens.push(antes);
             mapa.set(recebido.id, { ...recebido, itens, atualizadoEm: agoraISO(agora()) });
         }
         estado.planos = [...mapa.values()];
@@ -127,11 +131,58 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
     }
 
     function removerPlano(id) {
-        estado.planos = estado.planos.filter(plano => plano.id !== id);
+        const plano = estado.planos.find(p => p.id === id && !p.excluidoEm);
+        if (!plano) return null;
+        exigirPlanoLivre(plano);
+        cancelarPlano(id);
+        plano.excluidoEm = agoraISO(agora());
         persistir();
+        return clonar(plano);
     }
 
-    function listarPlanos() { return clonar(estado.planos); }
+    function listarPlanos(incluirExcluidos = false) { return clonar(estado.planos.filter(p => incluirExcluidos || !p.excluidoEm)); }
+
+    /** Não descarta recibos incertos nem interrompe uma chamada externa em andamento. */
+    function exigirPlanoLivre(plano) {
+        if ((plano.itens || []).some(i => emAndamento.has(i.id) || i.status === 'em andamento' || temResultadoPendente(i))) throw Object.assign(new Error('Há envio em andamento ou resultado incerto; confira antes de cancelar/excluir.'), { codigo: 'AGENDA_EM_USO', status: 409 });
+    }
+
+    /** Cancela apenas envios futuros; publicações confirmadas permanecem no histórico. */
+    function cancelarPlano(id) {
+        const plano = estado.planos.find(p => p.id === id && !p.excluidoEm);
+        if (!plano) return null;
+        exigirPlanoLivre(plano);
+        plano.status = 'cancelado';
+        for (const item of plano.itens || []) if (item.status !== 'confirmada') { item.status = 'cancelado'; item.approvalSignature = null; }
+        persistir(); return clonar(plano);
+    }
+
+    /** Exclusão recuperável oculta o item, mantendo recibos e impedindo ressurreição por cache. */
+    function removerItem(planoId, itemId) {
+        const { plano, item } = localizar(planoId, itemId);
+        if (!plano || !item) return null;
+        exigirPlanoLivre({ itens: [item] });
+        if (item.status !== 'confirmada') item.status = 'cancelado';
+        item.excluidoEm = agoraISO(agora());
+        persistir(); return clonar(plano);
+    }
+
+    /** Cancela por prazo civil mesmo itens pausados ou com horário anteriormente vencido. */
+    function cancelarVencidos(planoId = null) {
+        let cancelados = 0;
+        for (const plano of estado.planos) {
+            if (plano.excluidoEm || (planoId && plano.id !== planoId)) continue;
+            for (const item of plano.itens || []) {
+                if (['confirmada', 'cancelado', 'em andamento', 'incerto'].includes(item.status) || emAndamento.has(item.id) || temResultadoPendente(item)) continue;
+                const prazo = PlanejamentoSemanal.avaliarPrazo(item, agora(), item.timezone || 'Asia/Tokyo');
+                if (!prazo.prazoExpirado) continue;
+                item.status = 'cancelado'; item.approvalSignature = null; item.motivo = prazo.motivo; cancelados++;
+            }
+            if (plano.itens?.some(i => i.status === 'cancelado') && plano.itens.every(i => ['confirmada', 'cancelado'].includes(i.status))) plano.status = 'cancelado';
+        }
+        if (cancelados) persistir();
+        return { cancelados };
+    }
 
     function localizar(planoId, itemId) {
         const plano = estado.planos.find(item => item.id === planoId);
@@ -176,6 +227,16 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
     }
 
     async function executarItem(item) {
+        const prazo = PlanejamentoSemanal.avaliarPrazo(item, agora());
+        if (!prazo.elegivel) { item.status = prazo.prazoExpirado ? 'cancelado' : 'bloqueado'; item.motivo = prazo.motivo; return item.status; }
+        if (validarConteudo) {
+            const validacao = validarConteudo(item, agora());
+            if (!validacao.elegivel) {
+                item.status = 'bloqueado'; item.motivo = validacao.motivo;
+                registrar('SCHEDULING', 'blocked', { operationId: item.id, reason: 'content_safety', result: 'bloqueado' });
+                return 'bloqueado';
+            }
+        }
         const destinos = destinosDoItem(item);
         const instantePlanejado = instanteDoItem(item);
         const planejadoEm = instantePlanejado === null ? null : new Date(instantePlanejado).toISOString();
@@ -188,6 +249,11 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
         for (const destino of destinos) {
             const atual = item.resultados?.[destino]?.estado;
             if (['confirmada', 'incerto', 'em andamento'].includes(atual)) continue;
+            const limite = PlanejamentoSemanal.avaliarPrazo(item, agora());
+            if (!limite.elegivel) { item.status = limite.prazoExpirado ? 'cancelado' : 'bloqueado'; item.motivo = limite.motivo; return item.status; }
+            // Uma operação longa pode atravessar a virada do dia do evento.
+            const seguranca = validarConteudo?.(item, agora());
+            if (seguranca && !seguranca.elegivel) { item.status = 'bloqueado'; item.motivo = seguranca.motivo; return 'bloqueado'; }
             const tentativaId = `${item.id}:${destino}:${agoraISO(agora())}`;
             registrarResultado(item, destino, { estado: 'em andamento', tentativaId, iniciadoEm: agoraISO(agora()) });
             item.status = 'em andamento';
@@ -219,16 +285,22 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
         return Math.floor((referencia - instante) / 60000);
     }
 
-    async function executarCiclo() {
+    /** Executa o relógio ou, quando solicitado, somente um plano escolhido pelo usuário. */
+    async function executarCiclo({ planoId = null, permitirVencidos = false } = {}) {
         if (cicloAtivo) return { executados: 0, confirmados: 0, incertos: 0, falhas: 0, reagendados: 0, bloqueados: 0, reconciliados: 0, ignorado: 'ciclo em andamento' };
         cicloAtivo = true;
         const referencia = agora();
         const resumo = { executados: 0, confirmados: 0, incertos: 0, falhas: 0, reagendados: 0, bloqueados: 0, reconciliados: 0 };
         try {
+            cancelarVencidos(planoId);
             for (const plano of estado.planos) {
-                if (['pausado', 'cancelado', 'rascunho'].includes(plano.status)) continue;
+                if (planoId && plano.id !== planoId) continue;
+                if (plano.excluidoEm || ['pausado', 'cancelado', 'rascunho'].includes(plano.status)) continue;
                 for (const item of plano.itens || []) {
-                    if (!['aprovado', 'incerto', 'em andamento', 'aguardando'].includes(item.status)) continue;
+                    if (item.status === 'reagendado') item.status = 'vencido';
+                    const executavel = ['aprovado', 'incerto', 'em andamento', 'aguardando'];
+                    if (permitirVencidos) executavel.push('vencido');
+                    if (!executavel.includes(item.status)) continue;
                     if (emAndamento.has(item.id)) continue;
                     if (item.status === 'incerto' || item.status === 'em andamento' || temResultadoPendente(item)) {
                         emAndamento.add(item.id);
@@ -241,11 +313,11 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
                     if (resumo.executados >= maxPorCiclo) break;
                     const delta = atrasoMinutos(item, instante, referencia);
                     const tolerancia = Number.isFinite(Number(item.toleranciaMinutos)) ? Number(item.toleranciaMinutos) : 30;
-                    if (delta > tolerancia && item.atraso !== 'publicar') {
-                        item.status = 'reagendado';
-                        item.motivo = `Atraso de ${delta} min excede a tolerância de ${tolerancia} min; reagende ou ajuste a política.`;
+                    if (delta > tolerancia && !permitirVencidos) {
+                        item.status = 'vencido';
+                        item.motivo = `Horário vencido há ${delta} min. Este item não será publicado automaticamente; execute o plano manualmente ou edite a data.`;
                         resumo.reagendados++;
-                        registrar('SCHEDULING', 'delayed', { operationId: item.id, delayMinutes: delta, result: 'agendado' });
+                        registrar('SCHEDULING', 'expired', { operationId: item.id, delayMinutes: delta, result: 'vencido' });
                         continue;
                     }
                     emAndamento.add(item.id);
@@ -262,9 +334,15 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
         return resumo;
     }
 
+    /** Autoriza explicitamente a execução de um único plano, inclusive itens vencidos. */
+    function executarPlano(planoId) {
+        if (!estado.planos.some(plano => plano.id === planoId)) return null;
+        return executarCiclo({ planoId, permitirVencidos: true });
+    }
+
     function pausarPlano(planoId) {
         const plano = estado.planos.find(item => item.id === planoId);
-        if (!plano) return null;
+        if (!plano || plano.excluidoEm || plano.status === 'cancelado') return null;
         plano.status = 'pausado';
         plano.itens = plano.itens.map(item => ['aprovado', 'aguardando'].includes(item.status) && !temResultadoPendente(item) ? { ...item, status: 'pausado' } : item);
         persistir();
@@ -273,7 +351,7 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
 
     function retomarPlano(planoId) {
         const plano = estado.planos.find(item => item.id === planoId);
-        if (!plano) return null;
+        if (!plano || plano.excluidoEm || plano.status === 'cancelado') return null;
         plano.status = 'aprovado';
         plano.itens = plano.itens.map(item => item.status === 'pausado' ? { ...item, status: aprovacaoValida(item) ? 'aprovado' : 'rascunho', approvalSignature: aprovacaoValida(item) ? item.approvalSignature : null } : item);
         persistir();
@@ -282,7 +360,7 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
 
     function cancelarItem(planoId, itemId) {
         const { plano, item } = localizar(planoId, itemId);
-        if (!plano || !item || item.status === 'em andamento' || item.status === 'confirmada') return null;
+        if (!plano || !item || emAndamento.has(item.id) || temResultadoPendente(item) || item.status === 'em andamento' || item.status === 'confirmada') return null;
         item.status = 'cancelado';
         item.approvalSignature = null;
         persistir();
@@ -292,24 +370,25 @@ function criarMotor({ armazenamento, publicador, reconciliador = null, agora = D
     /** Reabilita manualmente um item que falhou, sem reenvio automático. */
     function reagendarItem(planoId, itemId) {
         const { plano, item } = localizar(planoId, itemId);
-        if (!plano || !item || item.status === 'em andamento' || item.status === 'confirmada' || temResultadoPendente(item)) return null;
+        if (!plano || !item || plano.excluidoEm || plano.status === 'cancelado' || item.excluidoEm || item.status === 'cancelado' || item.status === 'em andamento' || item.status === 'confirmada' || temResultadoPendente(item)) return null;
         item.status = aprovacaoValida(item) ? 'aprovado' : 'rascunho';
         item.motivo = null;
         persistir();
         return clonar(plano);
     }
 
-    return { sincronizarPlanos, removerPlano, listarPlanos, executarCiclo, reconciliarItem, pausarPlano, retomarPlano, cancelarItem, reagendarItem, _estado: () => estado, _funcoes: { instanteDoItem, assinaturaDoItem, aprovacaoValida, atrasoMinutos } };
+    return { sincronizarPlanos, removerPlano, removerItem, cancelarPlano, cancelarVencidos, listarPlanos, executarCiclo, executarPlano, reconciliarItem, pausarPlano, retomarPlano, cancelarItem, reagendarItem, _estado: () => estado, _funcoes: { instanteDoItem, assinaturaDoItem, aprovacaoValida, atrasoMinutos } };
 }
 
 /** Adapta um item de agendamento para uma chamada única de InstagramService.publish(). */
 function publicarItemNoInstagram(instagram, estadoMeta = null) {
     return async ({ item, destino }) => {
-        if (!DESTINOS.includes(destino) || destino === 'Facebook Page') throw Object.assign(new Error('Destino não implementado neste adaptador Instagram.'), { codigo: 'DESTINO_NAO_IMPLEMENTADO' });
+        if (!DESTINOS.includes(destino) || destino.startsWith('Facebook')) throw Object.assign(new Error('Destino não implementado neste adaptador Instagram.'), { codigo: 'DESTINO_NAO_IMPLEMENTADO' });
         const caption = item.legenda || '';
         const story = destino === 'Instagram Story';
         if (story && item.tipo === 'carrossel') throw Object.assign(new Error('Carrossel não é convertido automaticamente em Stories.'), { codigo: 'STORY_CARROSSEL_NAO_SUPORTADO' });
-        const formato = story ? 'story' : item.tipo === 'carrossel' ? 'carrossel' : item.tipo === 'video' ? 'reel' : 'imagem';
+        const video = ['video', 'reel'].includes(item.tipo);
+        const formato = story ? 'story' : item.tipo === 'carrossel' ? 'carrossel' : video ? 'reel' : 'imagem';
         const chave = `agenda:${item.id}:${destino}`;
         const assinatura = PlanejamentoSemanal.assinar({ tipo: formato, url: item.url, itens: item.itens, legenda: story ? '' : caption });
         const salvo = estadoMeta?.obter?.(chave);
@@ -317,9 +396,9 @@ function publicarItemNoInstagram(instagram, estadoMeta = null) {
             formato,
             itens: formato === 'carrossel' ? (Array.isArray(item.itens) ? item.itens : []) : undefined,
             mediaUrl: item.url,
-            imageUrl: formato === 'imagem' || (story && item.tipo !== 'video') ? item.url : undefined,
-            videoUrl: formato === 'reel' || (story && item.tipo === 'video') ? item.url : undefined,
-            storyTipo: story ? (item.tipo === 'video' ? 'video' : 'imagem') : null,
+            imageUrl: formato === 'imagem' || (story && !video) ? item.url : undefined,
+            videoUrl: formato === 'reel' || (story && video) ? item.url : undefined,
+            storyTipo: story ? (video ? 'video' : 'imagem') : null,
             caption: story ? '' : caption,
             publicacaoId: chave,
             containerId: salvo?.assinatura === assinatura ? salvo.containerId : null,

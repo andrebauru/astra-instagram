@@ -26,8 +26,8 @@
         });
         const rotulo = { nao_configurado: 'Não configurado', pronto_para_autorizar: 'Pronto para autorizar', conectado: 'Conectado', token_expirado: 'Autorização expirada ou revogada', erro_api: 'Erro na verificação' }[etapa] || etapa.replaceAll('_', ' ');
         el('meta-estado').textContent = erro || `${rotulo} · ${conexao.mensagem}${conexao.expiraEm ? ' · token expira em ' + new Date(conexao.expiraEm).toLocaleString('pt-BR') : ''}`;
-        el('meta-conectar').disabled = !conexao.configurado || ocupado;
-        el('meta-conectar').textContent = conexao.estado === 'desconectado' ? 'Conectar com Facebook' : 'Reconectar com Facebook';
+        el('meta-conectar').disabled = ocupado;
+        el('meta-conectar').textContent = !conexao.configurado ? 'Configurar conexão com a Meta' : conexao.estado === 'desconectado' ? 'Conectar com Facebook' : 'Reconectar com Facebook';
         const seletor = el('meta-paginas');
         seletor.replaceChildren(new Option('Selecione uma Página autorizada…', ''));
         for (const pagina of conexao.paginas) seletor.append(new Option(`${pagina.nome} · ${pagina.id}`, pagina.id));
@@ -70,7 +70,7 @@
         finally {
             ocupado = false;
             for (const id of ['meta-conectar', 'meta-verificar', 'meta-desconectar', 'meta-revogar']) el(id).disabled = false;
-            el('meta-conectar').disabled = !configurado;
+            el('meta-conectar').disabled = false;
             el('meta-selecionar').disabled = !el('meta-paginas').value;
         }
     }
@@ -92,7 +92,13 @@
     }
     /** Abre durante o clique para evitar bloqueio de popup após a requisição assíncrona. */
     function conectar() {
-        if (ocupado || !configurado) return;
+        if (ocupado) return;
+        if (!configurado) {
+            el('meta-configuracao-pendente').scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+            document.querySelector('[id^="config-"][aria-invalid="true"]')?.focus();
+            el('meta-estado').textContent = 'Complete os campos indicados do aplicativo Meta e salve as integrações. Depois use este botão para autorizar sua conta. Não envie senhas nem tokens pelo chat.';
+            return;
+        }
         const popup = window.open('about:blank', '_blank', 'popup=yes,width=620,height=760');
         if (!popup) { el('meta-estado').textContent = 'O navegador bloqueou a janela. Permita popups para este Astra e tente novamente.'; return; }
         // O provedor não recebe acesso à janela principal; o pai observa o retorno local.

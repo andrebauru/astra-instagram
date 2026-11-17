@@ -226,12 +226,13 @@ function criarCliente(base, transporte = globalThis.fetch) {
     const endereco = new URL(base);
     if (!['localhost', '127.0.0.1'].includes(endereco.hostname) || endereco.protocol !== 'http:' || endereco.username || endereco.password) throw new Error('O painel deve acessar somente o bridge local.');
     const ROTAS = [
+        '/config/exportar', '/config/importar',
         '/health', '/meta/me', '/facebook/me', '/config/integracoes', '/meta/conexao', '/meta/oauth/iniciar', '/meta/oauth/verificar', '/meta/oauth/selecionar', '/meta/oauth/desconectar', '/media/upload/capabilities', '/media/upload',
         '/astra/models', '/astra/generate', '/instagram/publish',
         '/instagram/media', '/instagram/metrics/update', '/instagram/analysis',
         '/agenda/planos', '/agenda/executar', '/agenda/pausar', '/agenda/retomar', '/agenda/reagendar', '/agenda/cancelar',
         '/empresa/config', '/empresa/template', '/empresa/agenda', '/empresa/template-padrao', '/empresa/recorrentes', '/empresa/templates',
-        '/publicacoes',
+        '/publicacoes', '/publicacoes/historico', '/agenda/excluir-plano', '/agenda/excluir-item', '/agenda/cancelar-plano', '/agenda/cancelar-vencidos',
         '/logs', '/logs/resumo', '/logs/event',
         '/diagnostico/access', '/diagnostico/status', '/diagnostico/event', '/diagnostico/start', '/diagnostico/stop', '/diagnostico/mark', '/diagnostico/export'
     ];
@@ -292,10 +293,12 @@ function criarCliente(base, transporte = globalThis.fetch) {
         MIDIA_UPLOAD_RECUSADO: 'O servidor remoto recusou o arquivo.',
         MIDIA_UPLOAD_RESPOSTA_INVALIDA: 'O servidor remoto respondeu sem uma URL pública válida.',
         REEL_PROCESSAMENTO: 'Falha de processamento do vídeo. Verifique o formato e a disponibilidade.',
+        REEL_DURACAO_INVALIDA: 'Meça o vídeo no Editor: Reels do Instagram exigem entre 3 e 900 segundos. Nenhuma publicação foi enviada.',
         REEL_TEMPO_ESGOTADO: 'O vídeo não terminou de processar no prazo.',
         PUBLICACAO_INDETERMINADA: 'A Meta não confirmou a publicação. Confira o Instagram antes de tentar novamente.',
         CARROSSEL_INVALIDO: 'Informe de 2 a 20 itens compatíveis, cada um com URL pública.',
         PLANO_NAO_ENCONTRADO: 'Plano ou item não encontrado no servidor.',
+        AGENDA_EM_USO: 'Há publicação em andamento ou resultado incerto. Confira os recibos antes de cancelar ou excluir.',
         PROMPT_INVALIDO: 'Informe um prompt textual válido.',
         METRICA_ID_INVALIDO: 'Informe um ID de mídia válido.',
         INSIGHTS_FALHA: 'Não foi possível consultar os insights desta mídia.',
@@ -304,8 +307,9 @@ function criarCliente(base, transporte = globalThis.fetch) {
 
     let csrf;
     async function solicitar(rota, body, opcoes = {}) {
-        if (!ROTAS.includes(rota)) throw new Error('Rota de integração não permitida.');
-        const protegida = body !== undefined && (rota.startsWith('/meta/oauth/') || rota === '/config/integracoes' || rota === '/logs/event');
+        const consultaLink = body === undefined && /^\/publicacoes\/link\?chave=[A-Za-z0-9_.%~-]+$/.test(rota);
+        if (!ROTAS.includes(rota) && !consultaLink) throw new Error('Rota de integração não permitida.');
+        const protegida = body !== undefined && (rota.startsWith('/meta/oauth/') || rota.startsWith('/config/') || rota === '/logs/event');
         if (protegida && !csrf) await solicitar('/meta/conexao');
         const destino = new URL(rota, endereco);
         for (const [chave, valor] of Object.entries(opcoes.params || {})) if (valor !== undefined && valor !== null) destino.searchParams.set(chave, String(valor));
